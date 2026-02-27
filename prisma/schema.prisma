@@ -13,8 +13,10 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users  User[]
-  roles  Role[]
+  users     User[]
+  roles     Role[]
+  ecos      ECO[]
+  templates Template[]
 }
 
 model User {
@@ -52,4 +54,52 @@ model UserRole {
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, roleId])
+}
+
+model ECO {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  tenantId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents AuditEvent[]
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  name      String
+  tenantId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  versions TemplateVersion[]
+
+  @@unique([name, tenantId])
+}
+
+model TemplateVersion {
+  id          String   @id @default(cuid())
+  templateId  String
+  version     String
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  ecoId      String
+  eventType  String
+  actorId    String?
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  eco ECO @relation(fields: [ecoId], references: [id], onDelete: Cascade)
 }
