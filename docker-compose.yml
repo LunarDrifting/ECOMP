@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ecomp-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ecomp_user
+      POSTGRES_PASSWORD: ecomp_password
+      POSTGRES_DB: ecomp_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ecomp_pgdata:/var/lib/postgresql/data
+
+volumes:
+  ecomp_pgdata:
