@@ -15,30 +15,60 @@ export async function POST() {
       )
     }
 
-    const template = await prisma.template.create({
-      data: {
+    const existingTemplate = await prisma.template.findFirst({
+      where: {
         name: 'Test Template',
         tenantId: tenant.id,
       },
       select: { id: true },
     })
 
-    const templateVersion = await prisma.templateVersion.create({
-      data: {
+    const template =
+      existingTemplate ??
+      (await prisma.template.create({
+        data: {
+          name: 'Test Template',
+          tenantId: tenant.id,
+        },
+        select: { id: true },
+      }))
+
+    const existingTemplateVersion = await prisma.templateVersion.findFirst({
+      where: {
         templateId: template.id,
         version: 'v1',
-        isPublished: true,
       },
       select: { id: true },
     })
 
-    const eco = await prisma.eCO.create({
-      data: {
+    const templateVersion =
+      existingTemplateVersion ??
+      (await prisma.templateVersion.create({
+        data: {
+          templateId: template.id,
+          version: 'v1',
+          isPublished: true,
+        },
+        select: { id: true },
+      }))
+
+    const existingEco = await prisma.eCO.findFirst({
+      where: {
         title: 'Test ECO',
         tenantId: tenant.id,
       },
       select: { id: true },
     })
+
+    const eco =
+      existingEco ??
+      (await prisma.eCO.create({
+        data: {
+          title: 'Test ECO',
+          tenantId: tenant.id,
+        },
+        select: { id: true },
+      }))
 
     return NextResponse.json({
       tenantId: tenant.id,
