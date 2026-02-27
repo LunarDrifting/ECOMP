@@ -42,6 +42,59 @@ export function tenantDb(tenantId: string) {
         }),
     },
 
+    eco: {
+      findById: (ecoId: string) =>
+        prisma.eCO.findFirst({
+          where: { id: ecoId, tenantId },
+        }),
+    },
+
+    templateVersion: {
+      findByIdViaTemplate: (templateVersionId: string) =>
+        prisma.templateVersion.findFirst({
+          where: {
+            id: templateVersionId,
+            template: { tenantId },
+          },
+          include: {
+            template: true,
+          },
+        }),
+    },
+
+    ecoPlan: {
+      findByEcoId: (ecoId: string) =>
+        prisma.eCOPlan.findFirst({
+          where: { ecoId, tenantId },
+        }),
+
+      create: (ecoId: string, templateVersionId: string) =>
+        prisma.eCOPlan.create({
+          data: {
+            ecoId,
+            templateVersionId,
+            tenantId,
+          },
+        }),
+    },
+
+    task: {
+      createRootPlaceholder: (ecoId: string, ownerRoleId: string, name: string) =>
+        prisma.task.create({
+          data: {
+            tenantId,
+            ecoId,
+            ownerRoleId,
+            name,
+            taskLevel: 'MILESTONE',
+            state: 'NOT_STARTED',
+            visibility: 'INTERNAL_ONLY',
+            approvalPolicy: 'NONE',
+            clockMode: 'ACTIVE',
+          },
+        }),
+    },
+
     userRole: prisma.userRole,
   }
 }
