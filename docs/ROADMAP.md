@@ -13,3 +13,8 @@ Establish strict tenant isolation and role-based access control core models and 
 - Create basic API route to create tenant + user
 - Enforce tenant scoping in Prisma usage
 - Add verification commands
+
+### Phase 1.3
+- Introduce Task and Dependency domain models per Preliminary Design Spec
+- Schema-only changes (no business logic)
+- Tenant-scoped modeling and Prisma migration discipline
