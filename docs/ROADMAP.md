@@ -18,3 +18,8 @@ Establish strict tenant isolation and role-based access control core models and 
 - Introduce Task and Dependency domain models per Preliminary Design Spec
 - Schema-only changes (no business logic)
 - Tenant-scoped modeling and Prisma migration discipline
+
+### Phase 1.4
+- Introduce ECOPlan domain model to bind ECO to TemplateVersion
+- Schema-only changes (no business logic)
+- Tenant-scoped modeling and Prisma migration discipline
