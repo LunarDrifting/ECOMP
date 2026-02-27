@@ -33,3 +33,13 @@ Establish strict tenant isolation and role-based access control core models and 
 - Introduce Gate domain model aligned to Design Spec
 - Schema-only changes (no business logic)
 - Tenant-scoped modeling and Prisma migration discipline
+
+## Milestone 2 — Workflow Instantiation Services
+
+Goal:
+Implement service-layer workflow instantiation operations using existing schema and strict tenant isolation.
+
+### Phase 2.0
+- Implement TemplateVersion -> Task instantiation service flow
+- Service-layer only with API entrypoint
+- Enforce tenant scoping and existing service pattern
