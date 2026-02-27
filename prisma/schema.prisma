@@ -49,6 +49,11 @@ enum DependencyType {
   START_TO_START
 }
 
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+}
+
 model Tenant {
   id        String   @id @default(cuid())
   name      String
@@ -61,6 +66,7 @@ model Tenant {
   templates Template[]
   tasks     Task[]
   ecoPlans  ECOPlan[]
+  approvals Approval[]
 }
 
 model User {
@@ -73,6 +79,7 @@ model User {
 
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userRoles UserRole[]
+  approvals Approval[]
 }
 
 model Role {
@@ -175,6 +182,7 @@ model Task {
   children     Task[]       @relation("TaskHierarchy")
   dependenciesFrom Dependency[] @relation("DependencyFrom")
   dependenciesTo   Dependency[] @relation("DependencyTo")
+  approvals        Approval[]
 
   @@index([tenantId])
   @@index([ecoId])
@@ -213,4 +221,20 @@ model ECOPlan {
   @@unique([ecoId])
   @@index([tenantId])
   @@index([templateVersionId])
+}
+
+model Approval {
+  id        String           @id @default(cuid())
+  taskId    String
+  actorId   String
+  tenantId  String
+  decision  ApprovalDecision
+  comment   String?
+  createdAt DateTime         @default(now())
+
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor  User   @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
