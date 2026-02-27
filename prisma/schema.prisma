@@ -7,6 +7,48 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum TaskLevel {
+  MILESTONE
+  STEP
+  SUBSTEP
+}
+
+enum TaskState {
+  NOT_STARTED
+  IN_PROGRESS
+  BLOCKED
+  PENDING_APPROVAL
+  DONE
+  NOT_REQUIRED
+  CANCELLED
+}
+
+enum TaskVisibility {
+  INTERNAL_ONLY
+  CUSTOMER_VISIBLE
+  CUSTOMER_ACTIONABLE
+}
+
+enum ApprovalPolicy {
+  NONE
+  SINGLE
+  SEQUENTIAL
+  PARALLEL
+  QUORUM
+}
+
+enum ClockMode {
+  ACTIVE
+  WAITING_ON_CUSTOMER
+  WAITING_ON_SUPPLIER
+  WAITING_INTERNAL
+}
+
+enum DependencyType {
+  FINISH_TO_START
+  START_TO_START
+}
+
 model Tenant {
   id        String   @id @default(cuid())
   name      String
@@ -17,6 +59,7 @@ model Tenant {
   roles     Role[]
   ecos      ECO[]
   templates Template[]
+  tasks     Task[]
 }
 
 model User {
@@ -38,8 +81,9 @@ model Role {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userRoles UserRole[]
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userRoles  UserRole[]
+  ownedTasks Task[]
 
   @@unique([name, tenantId])
 }
@@ -66,6 +110,7 @@ model ECO {
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   auditEvents AuditEvent[]
+  tasks       Task[]
 }
 
 model Template {
@@ -102,4 +147,50 @@ model AuditEvent {
   createdAt  DateTime @default(now())
 
   eco ECO @relation(fields: [ecoId], references: [id], onDelete: Cascade)
+}
+
+model Task {
+  id             String          @id @default(cuid())
+  tenantId       String
+  ecoId          String
+  parentTaskId   String?
+  taskLevel      TaskLevel
+  name           String
+  ownerRoleId    String
+  state          TaskState
+  visibility     TaskVisibility
+  approvalPolicy ApprovalPolicy
+  clockMode      ClockMode
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  eco    ECO    @relation(fields: [ecoId], references: [id], onDelete: Cascade)
+  owner  Role   @relation(fields: [ownerRoleId], references: [id], onDelete: Restrict)
+
+  parent       Task?        @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  children     Task[]       @relation("TaskHierarchy")
+  dependenciesFrom Dependency[] @relation("DependencyFrom")
+  dependenciesTo   Dependency[] @relation("DependencyTo")
+
+  @@index([tenantId])
+  @@index([ecoId])
+  @@index([ownerRoleId])
+  @@index([parentTaskId])
+}
+
+model Dependency {
+  id         String         @id @default(cuid())
+  fromTaskId String
+  toTaskId   String
+  type       DependencyType
+  lagMinutes Int
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  fromTask Task @relation("DependencyFrom", fields: [fromTaskId], references: [id], onDelete: Cascade)
+  toTask   Task @relation("DependencyTo", fields: [toTaskId], references: [id], onDelete: Cascade)
+
+  @@index([fromTaskId])
+  @@index([toTaskId])
 }
