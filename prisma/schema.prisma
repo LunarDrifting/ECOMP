@@ -54,6 +54,11 @@ enum ApprovalDecision {
   REJECTED
 }
 
+enum GateType {
+  PRECONDITION
+  POSTCONDITION
+}
+
 model Tenant {
   id        String   @id @default(cuid())
   name      String
@@ -67,6 +72,7 @@ model Tenant {
   tasks     Task[]
   ecoPlans  ECOPlan[]
   approvals Approval[]
+  gates     Gate[]
 }
 
 model User {
@@ -183,6 +189,7 @@ model Task {
   dependenciesFrom Dependency[] @relation("DependencyFrom")
   dependenciesTo   Dependency[] @relation("DependencyTo")
   approvals        Approval[]
+  gates            Gate[]
 
   @@index([tenantId])
   @@index([ecoId])
@@ -234,6 +241,20 @@ model Approval {
 
   task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
   actor  User   @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Gate {
+  id        String   @id @default(cuid())
+  taskId    String
+  tenantId  String
+  type      GateType
+  condition Json
+  createdAt DateTime @default(now())
+
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
