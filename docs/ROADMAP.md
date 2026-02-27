@@ -28,3 +28,8 @@ Establish strict tenant isolation and role-based access control core models and 
 - Introduce Approval domain model with immutable decision semantics
 - Schema-only changes (no business logic)
 - Tenant-scoped modeling and Prisma migration discipline
+
+### Phase 1.6
+- Introduce Gate domain model aligned to Design Spec
+- Schema-only changes (no business logic)
+- Tenant-scoped modeling and Prisma migration discipline
