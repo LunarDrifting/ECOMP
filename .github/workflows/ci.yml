@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Create test database
+        run: |
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ecomp_test_db') THEN
+              CREATE DATABASE ecomp_test_db;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Run Prisma migrations (test DB)
+        env:
+          DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/ecomp_test_db
+        run: DATABASE_URL="$DATABASE_URL_TEST" npx prisma migrate deploy
+
+      - name: Build
+        run: npm run build
+
+      - name: Run integration tests
+        env:
+          DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/ecomp_test_db
+        run: npm run test
