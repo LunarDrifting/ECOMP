@@ -222,6 +222,20 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
         }),
 
+      listResolutionFieldsByIds: (taskIds: string[]) =>
+        client.task.findMany({
+          where: {
+            tenantId,
+            id: { in: taskIds },
+          },
+          select: {
+            id: true,
+            state: true,
+            ownerRoleId: true,
+            approvalPolicy: true,
+          },
+        }),
+
       findOwnerRoleById: (taskId: string) =>
         client.task.findFirst({
           where: {
@@ -259,6 +273,20 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
             toTask: { tenantId },
           },
           select: {
+            fromTaskId: true,
+            toTaskId: true,
+          },
+        }),
+
+      listDownstreamByFromTaskIds: (fromTaskIds: string[]) =>
+        client.dependency.findMany({
+          where: {
+            fromTaskId: { in: fromTaskIds },
+            fromTask: { tenantId },
+            toTask: { tenantId },
+          },
+          select: {
+            fromTaskId: true,
             toTaskId: true,
           },
         }),
@@ -332,6 +360,19 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
         }),
 
+      listByTaskIdsForPolicy: (taskIds: string[]) =>
+        client.approval.findMany({
+          where: {
+            taskId: { in: taskIds },
+            tenantId,
+          },
+          select: {
+            taskId: true,
+            actorId: true,
+            decision: true,
+          },
+        }),
+
       createForTask: (args: {
         taskId: string
         actorId: string
@@ -380,6 +421,19 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           select: {
             taskId: true,
             type: true,
+          },
+        }),
+
+      listPreconditionsByTaskIds: (taskIds: string[]) =>
+        client.gate.findMany({
+          where: {
+            taskId: { in: taskIds },
+            tenantId,
+            type: 'PRECONDITION',
+          },
+          select: {
+            taskId: true,
+            condition: true,
           },
         }),
     },
