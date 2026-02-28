@@ -1,4 +1,6 @@
+import { Prisma } from '@prisma/client'
 import { tenantDb } from '@/lib/db'
+import { prisma } from '@/lib/prisma'
 
 const INVALID_BLUEPRINT_GRAPH_ERROR =
   'Invalid blueprint: circular dependency detected'
@@ -100,6 +102,7 @@ type InstantiateTemplateForEcoInput = {
 type ResolveDependenciesForTaskInput = {
   tenantId: string
   taskId: string
+  tx?: Prisma.TransactionClient
 }
 
 type MarkTaskDoneInput = {
@@ -348,8 +351,9 @@ export async function instantiateTemplateForEco({
 export async function resolveDependenciesForTask({
   tenantId,
   taskId,
+  tx,
 }: ResolveDependenciesForTaskInput) {
-  const db = tenantDb(tenantId)
+  const db = tenantDb(tenantId, tx ?? prisma)
 
   const sourceTask = await db.task.findById(taskId)
   if (!sourceTask) {
@@ -512,8 +516,11 @@ export async function markTaskDone({
     throw new Error('Precondition gate failed before marking task DONE')
   }
 
-  await db.task.updateStateById(taskId, 'DONE')
-  const resolution = await resolveDependenciesForTask({ tenantId, taskId })
+  const resolution = await prisma.$transaction(async (tx) => {
+    const txDb = tenantDb(tenantId, tx)
+    await txDb.task.updateStateById(taskId, 'DONE')
+    return resolveDependenciesForTask({ tenantId, taskId, tx })
+  })
 
   return {
     taskId,
