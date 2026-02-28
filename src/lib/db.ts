@@ -110,6 +110,7 @@ export function tenantDb(tenantId: string) {
           select: {
             id: true,
             state: true,
+            approvalPolicy: true,
           },
         }),
 
@@ -269,6 +270,19 @@ export function tenantDb(tenantId: string) {
           },
         })
       },
+    },
+
+    approval: {
+      listByTaskId: (taskId: string) =>
+        prisma.approval.findMany({
+          where: {
+            taskId,
+            tenantId,
+          },
+          select: {
+            decision: true,
+          },
+        }),
     },
 
     userRole: prisma.userRole,
