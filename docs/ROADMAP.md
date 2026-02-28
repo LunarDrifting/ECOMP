@@ -63,3 +63,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Materialize runtime Dependency rows from blueprint dependency definitions during instantiation
 - Service-layer only, no schema/model changes
 - Tenant-scoped dependency creation with idempotent instantiation behavior
+
+### Phase 2.5
+- Compute initial task blocking state from runtime dependency graph during first instantiation
+- Service-layer only, no schema/model changes
+- Deterministic initial state assignment for newly created tasks
