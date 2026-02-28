@@ -137,8 +137,10 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
           select: {
             id: true,
+            ownerRoleId: true,
             state: true,
             approvalPolicy: true,
+            createdAt: true,
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         }),
@@ -421,6 +423,19 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           select: {
             taskId: true,
             type: true,
+          },
+        }),
+
+      listByTaskIdsWithCondition: (taskIds: string[]) =>
+        client.gate.findMany({
+          where: {
+            taskId: { in: taskIds },
+            tenantId,
+          },
+          select: {
+            taskId: true,
+            type: true,
+            condition: true,
           },
         }),
 
