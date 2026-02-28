@@ -7,6 +7,11 @@ type InstantiateTemplateForEcoInput = {
   actorId?: string
 }
 
+type ResolveDependenciesForTaskInput = {
+  tenantId: string
+  taskId: string
+}
+
 export async function instantiateTemplateForEco({
   tenantId,
   ecoId,
@@ -184,5 +189,93 @@ export async function instantiateTemplateForEco({
     blockedTasks: blockedTaskIds.length,
     readyTasks: readyTaskIds.length,
     status: 'created',
+  }
+}
+
+export async function resolveDependenciesForTask({
+  tenantId,
+  taskId,
+}: ResolveDependenciesForTaskInput) {
+  const db = tenantDb(tenantId)
+
+  const sourceTask = await db.task.findById(taskId)
+  if (!sourceTask) {
+    throw new Error('Task not found for tenant')
+  }
+
+  if (sourceTask.state !== 'DONE') {
+    return {
+      taskId,
+      tenantId,
+      tasksUnblocked: 0,
+      unblockedTaskIds: [],
+      status: 'noop_source_not_done',
+    }
+  }
+
+  const downstreamEdges = await db.dependency.listDownstreamByFromTaskId(taskId)
+  const downstreamTaskIds = Array.from(
+    new Set(downstreamEdges.map((edge) => edge.toTaskId))
+  ).sort()
+
+  if (downstreamTaskIds.length === 0) {
+    return {
+      taskId,
+      tenantId,
+      tasksUnblocked: 0,
+      unblockedTaskIds: [],
+      status: 'noop_no_downstream_tasks',
+    }
+  }
+
+  const downstreamTasks = await db.task.listStatesByIds(downstreamTaskIds)
+  const blockedTaskIds = downstreamTasks
+    .filter((task) => task.state === 'BLOCKED')
+    .map((task) => task.id)
+    .sort()
+
+  if (blockedTaskIds.length === 0) {
+    return {
+      taskId,
+      tenantId,
+      tasksUnblocked: 0,
+      unblockedTaskIds: [],
+      status: 'noop_no_blocked_downstream',
+    }
+  }
+
+  const incomingDependencies = await db.dependency.listIncomingByToTaskIds(
+    blockedTaskIds
+  )
+  const upstreamTaskIds = Array.from(
+    new Set(incomingDependencies.map((edge) => edge.fromTaskId))
+  ).sort()
+  const upstreamTaskStates = await db.task.listStatesByIds(upstreamTaskIds)
+  const upstreamStateByTaskId = new Map(
+    upstreamTaskStates.map((task) => [task.id, task.state])
+  )
+
+  const unblockedTaskIds = blockedTaskIds.filter((downstreamTaskId) => {
+    const requiredUpstreamEdges = incomingDependencies.filter(
+      (edge) => edge.toTaskId === downstreamTaskId
+    )
+    return (
+      requiredUpstreamEdges.length > 0 &&
+      requiredUpstreamEdges.every(
+        (edge) => upstreamStateByTaskId.get(edge.fromTaskId) === 'DONE'
+      )
+    )
+  })
+
+  if (unblockedTaskIds.length > 0) {
+    await db.task.updateStateForIds(unblockedTaskIds, 'NOT_STARTED')
+  }
+
+  return {
+    taskId,
+    tenantId,
+    tasksUnblocked: unblockedTaskIds.length,
+    unblockedTaskIds,
+    status: unblockedTaskIds.length > 0 ? 'resolved' : 'noop_dependencies_pending',
   }
 }
