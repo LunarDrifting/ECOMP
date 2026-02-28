@@ -2,6 +2,8 @@ import { tenantDb } from '@/lib/db'
 
 const INVALID_BLUEPRINT_GRAPH_ERROR =
   'Invalid blueprint: circular dependency detected'
+const TASK_COMPLETION_FORBIDDEN_ERROR =
+  'Forbidden: actor not authorized to complete task'
 
 type BlueprintTaskDefinition = {
   id: string
@@ -101,6 +103,7 @@ type ResolveDependenciesForTaskInput = {
 type MarkTaskDoneInput = {
   tenantId: string
   taskId: string
+  actorId: string
 }
 
 export async function instantiateTemplateForEco({
@@ -377,7 +380,11 @@ export async function resolveDependenciesForTask({
   }
 }
 
-export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
+export async function markTaskDone({
+  tenantId,
+  taskId,
+  actorId,
+}: MarkTaskDoneInput) {
   const db = tenantDb(tenantId)
 
   const task = await db.task.findById(taskId)
@@ -400,6 +407,21 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
       gateCheckPassed: false,
       status: 'noop_already_done',
     }
+  }
+
+  const actorRoleAssignments = await db.userRole.listRoleAssignmentsByUserId(
+    actorId
+  )
+  const actorRoleIds = new Set(
+    actorRoleAssignments.map((assignment) => assignment.roleId)
+  )
+  const hasAdminRole = actorRoleAssignments.some(
+    (assignment) => assignment.role.name === 'ADMIN'
+  )
+  const ownsTaskRole = actorRoleIds.has(task.ownerRoleId)
+
+  if (!hasAdminRole && !ownsTaskRole) {
+    throw new Error(TASK_COMPLETION_FORBIDDEN_ERROR)
   }
 
   let approvalCheckPassed = false
