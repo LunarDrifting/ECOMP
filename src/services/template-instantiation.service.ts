@@ -1,5 +1,91 @@
 import { tenantDb } from '@/lib/db'
 
+const INVALID_BLUEPRINT_GRAPH_ERROR =
+  'Invalid blueprint: circular dependency detected'
+
+type BlueprintTaskDefinition = {
+  id: string
+}
+
+type BlueprintDependencyDefinition = {
+  fromDefinitionId: string
+  toDefinitionId: string
+}
+
+function validateBlueprintGraph({
+  definitions,
+  dependencyDefinitions,
+}: {
+  definitions: BlueprintTaskDefinition[]
+  dependencyDefinitions: BlueprintDependencyDefinition[]
+}) {
+  const definitionIds = new Set(definitions.map((definition) => definition.id))
+  const adjacency = new Map<string, string[]>()
+
+  for (const definition of definitions) {
+    adjacency.set(definition.id, [])
+  }
+
+  for (const dependencyDefinition of dependencyDefinitions) {
+    const { fromDefinitionId, toDefinitionId } = dependencyDefinition
+
+    if (fromDefinitionId === toDefinitionId) {
+      throw new Error(INVALID_BLUEPRINT_GRAPH_ERROR)
+    }
+
+    if (!definitionIds.has(fromDefinitionId) || !definitionIds.has(toDefinitionId)) {
+      continue
+    }
+
+    const outgoing = adjacency.get(fromDefinitionId)
+    if (outgoing && !outgoing.includes(toDefinitionId)) {
+      outgoing.push(toDefinitionId)
+    }
+  }
+
+  for (const outgoing of adjacency.values()) {
+    outgoing.sort()
+  }
+
+  const visitState = new Map<string, 0 | 1 | 2>()
+
+  const detectCycle = (definitionId: string): boolean => {
+    const state = visitState.get(definitionId) ?? 0
+
+    if (state === 1) {
+      return true
+    }
+
+    if (state === 2) {
+      return false
+    }
+
+    visitState.set(definitionId, 1)
+    const outgoing = adjacency.get(definitionId) ?? []
+
+    for (const nextDefinitionId of outgoing) {
+      if (detectCycle(nextDefinitionId)) {
+        return true
+      }
+    }
+
+    visitState.set(definitionId, 2)
+    return false
+  }
+
+  const sortedDefinitionIds = Array.from(definitionIds).sort()
+
+  for (const definitionId of sortedDefinitionIds) {
+    if ((visitState.get(definitionId) ?? 0) !== 0) {
+      continue
+    }
+
+    if (detectCycle(definitionId)) {
+      throw new Error(INVALID_BLUEPRINT_GRAPH_ERROR)
+    }
+  }
+}
+
 type InstantiateTemplateForEcoInput = {
   tenantId: string
   ecoId: string
@@ -41,6 +127,21 @@ export async function instantiateTemplateForEco({
     throw new Error('ECO and Template must belong to same tenant')
   }
 
+  const definitions = await db.templateTaskDefinition.listByTemplateVersion(
+    templateVersionId
+  )
+  if (definitions.length === 0) {
+    throw new Error('No TemplateTaskDefinition rows found for templateVersion')
+  }
+
+  const dependencyDefinitions =
+    await db.templateDependencyDefinition.listByTemplateVersion(templateVersionId)
+
+  validateBlueprintGraph({
+    definitions,
+    dependencyDefinitions,
+  })
+
   let ecoPlan = await db.ecoPlan.findByEcoId(ecoId)
   let createdEcoPlan = false
 
@@ -68,13 +169,6 @@ export async function instantiateTemplateForEco({
       readyTasks: 0,
       status: 'noop_existing_tasks',
     }
-  }
-
-  const definitions = await db.templateTaskDefinition.listByTemplateVersion(
-    templateVersionId
-  )
-  if (definitions.length === 0) {
-    throw new Error('No TemplateTaskDefinition rows found for templateVersion')
   }
 
   const createdTaskIds: string[] = []
@@ -123,8 +217,6 @@ export async function instantiateTemplateForEco({
     }
   }
 
-  const dependencyDefinitions =
-    await db.templateDependencyDefinition.listByTemplateVersion(templateVersionId)
   const existingDependencies = await db.dependency.listByTaskIds(createdTaskIds)
   const knownEdges = new Set(
     existingDependencies.map((edge) => `${edge.fromTaskId}:${edge.toTaskId}`)
