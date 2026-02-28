@@ -54,6 +54,8 @@ export async function instantiateTemplateForEco({
       createdTaskIds: [],
       dependenciesCreated: 0,
       createdDependencyIds: [],
+      blockedTasks: 0,
+      readyTasks: 0,
       status: 'noop_existing_tasks',
     }
   }
@@ -119,6 +121,7 @@ export async function instantiateTemplateForEco({
   )
   const blueprintEdgesSeen = new Set<string>()
   const createdDependencyIds: string[] = []
+  const incomingDependencyTaskIds = new Set<string>()
 
   for (const dependencyDefinition of dependencyDefinitions) {
     const fromTaskId = definitionToTaskId.get(dependencyDefinition.fromDefinitionId)
@@ -150,6 +153,21 @@ export async function instantiateTemplateForEco({
 
     knownEdges.add(edgeKey)
     createdDependencyIds.push(dependency.id)
+    incomingDependencyTaskIds.add(dependency.toTaskId)
+  }
+
+  const blockedTaskIds = createdTaskIds
+    .filter((taskId) => incomingDependencyTaskIds.has(taskId))
+    .sort()
+  const readyTaskIds = createdTaskIds
+    .filter((taskId) => !incomingDependencyTaskIds.has(taskId))
+    .sort()
+
+  if (blockedTaskIds.length > 0) {
+    await db.task.updateStateForIds(blockedTaskIds, 'BLOCKED')
+  }
+  if (readyTaskIds.length > 0) {
+    await db.task.updateStateForIds(readyTaskIds, 'NOT_STARTED')
   }
 
   return {
@@ -163,6 +181,8 @@ export async function instantiateTemplateForEco({
     createdTaskIds,
     dependenciesCreated: createdDependencyIds.length,
     createdDependencyIds,
+    blockedTasks: blockedTaskIds.length,
+    readyTasks: readyTaskIds.length,
     status: 'created',
   }
 }
