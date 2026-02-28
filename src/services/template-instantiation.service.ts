@@ -13,6 +13,25 @@ const TASK_COMPLETION_FORBIDDEN_ERROR =
 const APPROVAL_POLICY_NOT_SATISFIED_ERROR =
   'Approval policy requirements not satisfied'
 
+function mapInstantiationReasonCode(errorMessage: string) {
+  if (errorMessage === INVALID_BLUEPRINT_GRAPH_ERROR) {
+    return 'BLUEPRINT_INVALID'
+  }
+  if (errorMessage.includes('No TemplateTaskDefinition rows found')) {
+    return 'MISSING_DEFINITIONS'
+  }
+  if (errorMessage.includes('TemplateVersion not found')) {
+    return 'TEMPLATE_VERSION_NOT_FOUND'
+  }
+  if (errorMessage.includes('ECO not found')) {
+    return 'ECO_NOT_FOUND'
+  }
+  if (errorMessage.includes('already bound to different TemplateVersion')) {
+    return 'ECOPLAN_VERSION_MISMATCH'
+  }
+  return 'INSTANTIATION_REJECTED'
+}
+
 type BlueprintTaskDefinition = {
   id: string
 }
@@ -187,189 +206,249 @@ export async function instantiateTemplateForEco({
   actorId,
 }: InstantiateTemplateForEcoInput) {
   const db = tenantDb(tenantId)
-
-  const eco = await db.eco.findById(ecoId)
-  if (!eco) {
-    throw new Error('ECO not found for tenant')
-  }
-
-  const templateVersion = await db.templateVersion.findByIdViaTemplate(
-    templateVersionId
-  )
-  if (!templateVersion) {
-    throw new Error('TemplateVersion not found for tenant')
-  }
-
-  if (eco.tenantId !== templateVersion.template.tenantId) {
-    throw new Error('ECO and Template must belong to same tenant')
-  }
-
-  const definitions = await db.templateTaskDefinition.listByTemplateVersion(
-    templateVersionId
-  )
-  if (definitions.length === 0) {
-    throw new Error('No TemplateTaskDefinition rows found for templateVersion')
-  }
-
-  const dependencyDefinitions =
-    await db.templateDependencyDefinition.listByTemplateVersion(templateVersionId)
-
-  validateBlueprintGraph({
-    definitions,
-    dependencyDefinitions,
+  await db.audit.emitAuditEvent({
+    ecoId,
+    actorId,
+    eventType: 'INSTANTIATE_ATTEMPT',
+    payload: {
+      ecoId,
+      templateVersionId,
+    },
   })
 
-  let ecoPlan = await db.ecoPlan.findByEcoId(ecoId)
-  let createdEcoPlan = false
+  try {
+    const eco = await db.eco.findById(ecoId)
+    if (!eco) {
+      throw new Error('ECO not found for tenant')
+    }
 
-  if (!ecoPlan) {
-    ecoPlan = await db.ecoPlan.create(ecoId, templateVersionId)
-    createdEcoPlan = true
-  } else if (ecoPlan.templateVersionId !== templateVersionId) {
-    throw new Error('ECOPlan already bound to different TemplateVersion')
-  }
+    const templateVersion = await db.templateVersion.findByIdViaTemplate(
+      templateVersionId
+    )
+    if (!templateVersion) {
+      throw new Error('TemplateVersion not found for tenant')
+    }
 
-  const existingTasks = await db.task.listByEcoId(ecoId)
-  if (existingTasks.length > 0) {
-    return {
+    if (eco.tenantId !== templateVersion.template.tenantId) {
+      throw new Error('ECO and Template must belong to same tenant')
+    }
+
+    const definitions = await db.templateTaskDefinition.listByTemplateVersion(
+      templateVersionId
+    )
+    if (definitions.length === 0) {
+      throw new Error('No TemplateTaskDefinition rows found for templateVersion')
+    }
+
+    const dependencyDefinitions =
+      await db.templateDependencyDefinition.listByTemplateVersion(templateVersionId)
+
+    validateBlueprintGraph({
+      definitions,
+      dependencyDefinitions,
+    })
+
+    let ecoPlan = await db.ecoPlan.findByEcoId(ecoId)
+    let createdEcoPlan = false
+
+    if (!ecoPlan) {
+      ecoPlan = await db.ecoPlan.create(ecoId, templateVersionId)
+      createdEcoPlan = true
+    } else if (ecoPlan.templateVersionId !== templateVersionId) {
+      throw new Error('ECOPlan already bound to different TemplateVersion')
+    }
+
+    const existingTasks = await db.task.listByEcoId(ecoId)
+    if (existingTasks.length > 0) {
+      const noopResult = {
+        ecoId,
+        tenantId,
+        templateVersionId,
+        actorId: actorId ?? null,
+        ecoPlanId: ecoPlan.id,
+        createdEcoPlan,
+        tasksCreated: 0,
+        createdTaskIds: [],
+        dependenciesCreated: 0,
+        createdDependencyIds: [],
+        blockedTasks: 0,
+        readyTasks: 0,
+        status: 'noop_existing_tasks',
+      }
+
+      await db.audit.emitAuditEvent({
+        ecoId,
+        actorId,
+        eventType: 'INSTANTIATE_SUCCESS',
+        payload: {
+          ecoId,
+          templateVersionId,
+          status: noopResult.status,
+          tasksCreated: 0,
+          dependenciesCreated: 0,
+          blockedTasks: 0,
+          readyTasks: 0,
+        },
+      })
+
+      return noopResult
+    }
+
+    const createdTaskIds: string[] = []
+    const definitionToTaskId = new Map<string, string>()
+    const pending = [...definitions]
+
+    while (pending.length > 0) {
+      let createdThisPass = 0
+
+      for (let i = 0; i < pending.length; i += 1) {
+        const def = pending[i]
+        const parentReady =
+          !def.parentDefinitionId ||
+          definitionToTaskId.has(def.parentDefinitionId)
+
+        if (!parentReady) {
+          continue
+        }
+
+        const parentTaskId = def.parentDefinitionId
+          ? definitionToTaskId.get(def.parentDefinitionId)
+          : undefined
+
+        const task = await db.task.createFromDefinition({
+          ecoId,
+          ownerRoleId: def.ownerRoleId,
+          name: def.name,
+          taskLevel: def.taskLevel,
+          visibility: def.visibility,
+          approvalPolicy: def.approvalPolicy,
+          clockMode: def.clockMode,
+          parentTaskId,
+        })
+
+        definitionToTaskId.set(def.id, task.id)
+        createdTaskIds.push(task.id)
+        pending.splice(i, 1)
+        i -= 1
+        createdThisPass += 1
+      }
+
+      if (createdThisPass === 0) {
+        throw new Error(
+          'Unresolvable TemplateTaskDefinition hierarchy: parent definitions missing or cyclic'
+        )
+      }
+    }
+
+    const existingDependencies = await db.dependency.listByTaskIds(createdTaskIds)
+    const knownEdges = new Set(
+      existingDependencies.map((edge) => `${edge.fromTaskId}:${edge.toTaskId}`)
+    )
+    const blueprintEdgesSeen = new Set<string>()
+    const createdDependencyIds: string[] = []
+    const incomingDependencyTaskIds = new Set<string>()
+
+    for (const dependencyDefinition of dependencyDefinitions) {
+      const fromTaskId = definitionToTaskId.get(dependencyDefinition.fromDefinitionId)
+      const toTaskId = definitionToTaskId.get(dependencyDefinition.toDefinitionId)
+
+      if (!fromTaskId || !toTaskId) {
+        throw new Error(
+          'TemplateDependencyDefinition references missing task definition mapping'
+        )
+      }
+
+      if (fromTaskId === toTaskId) {
+        throw new Error('Self dependency is not allowed')
+      }
+
+      const edgeKey = `${fromTaskId}:${toTaskId}`
+      if (blueprintEdgesSeen.has(edgeKey) || knownEdges.has(edgeKey)) {
+        continue
+      }
+
+      blueprintEdgesSeen.add(edgeKey)
+
+      const dependency = await db.dependency.create({
+        fromTaskId,
+        toTaskId,
+        type: dependencyDefinition.type,
+        lagMinutes: dependencyDefinition.lagMinutes,
+      })
+
+      knownEdges.add(edgeKey)
+      createdDependencyIds.push(dependency.id)
+      incomingDependencyTaskIds.add(dependency.toTaskId)
+    }
+
+    const blockedTaskIds = createdTaskIds.filter((taskId) =>
+      incomingDependencyTaskIds.has(taskId)
+    )
+    const readyTaskIds = createdTaskIds.filter(
+      (taskId) => !incomingDependencyTaskIds.has(taskId)
+    )
+
+    const createdTasks = await db.task.listStatesByIds(createdTaskIds)
+    const blockedTasks = createdTasks.filter((task) =>
+      blockedTaskIds.includes(task.id)
+    )
+    const readyTasks = createdTasks.filter((task) => readyTaskIds.includes(task.id))
+
+    if (blockedTaskIds.length > 0) {
+      assertTasksCanTransition(blockedTasks, 'BLOCKED', 'instantiation')
+      await db.task.setBlockedForInstantiation(blockedTaskIds)
+    }
+
+    // Ready tasks are already initialized as NOT_STARTED at creation time.
+    if (readyTasks.some((task) => task.state !== 'NOT_STARTED')) {
+      throw new Error(ILLEGAL_STATE_TRANSITION_ERROR)
+    }
+
+    const createdResult = {
       ecoId,
       tenantId,
       templateVersionId,
       actorId: actorId ?? null,
       ecoPlanId: ecoPlan.id,
       createdEcoPlan,
-      tasksCreated: 0,
-      createdTaskIds: [],
-      dependenciesCreated: 0,
-      createdDependencyIds: [],
-      blockedTasks: 0,
-      readyTasks: 0,
-      status: 'noop_existing_tasks',
+      tasksCreated: createdTaskIds.length,
+      createdTaskIds,
+      dependenciesCreated: createdDependencyIds.length,
+      createdDependencyIds,
+      blockedTasks: blockedTaskIds.length,
+      readyTasks: readyTaskIds.length,
+      status: 'created',
     }
-  }
 
-  const createdTaskIds: string[] = []
-  const definitionToTaskId = new Map<string, string>()
-  const pending = [...definitions]
-
-  while (pending.length > 0) {
-    let createdThisPass = 0
-
-    for (let i = 0; i < pending.length; i += 1) {
-      const def = pending[i]
-      const parentReady =
-        !def.parentDefinitionId ||
-        definitionToTaskId.has(def.parentDefinitionId)
-
-      if (!parentReady) {
-        continue
-      }
-
-      const parentTaskId = def.parentDefinitionId
-        ? definitionToTaskId.get(def.parentDefinitionId)
-        : undefined
-
-      const task = await db.task.createFromDefinition({
+    await db.audit.emitAuditEvent({
+      ecoId,
+      actorId,
+      eventType: 'INSTANTIATE_SUCCESS',
+      payload: {
         ecoId,
-        ownerRoleId: def.ownerRoleId,
-        name: def.name,
-        taskLevel: def.taskLevel,
-        visibility: def.visibility,
-        approvalPolicy: def.approvalPolicy,
-        clockMode: def.clockMode,
-        parentTaskId,
-      })
-
-      definitionToTaskId.set(def.id, task.id)
-      createdTaskIds.push(task.id)
-      pending.splice(i, 1)
-      i -= 1
-      createdThisPass += 1
-    }
-
-    if (createdThisPass === 0) {
-      throw new Error(
-        'Unresolvable TemplateTaskDefinition hierarchy: parent definitions missing or cyclic'
-      )
-    }
-  }
-
-  const existingDependencies = await db.dependency.listByTaskIds(createdTaskIds)
-  const knownEdges = new Set(
-    existingDependencies.map((edge) => `${edge.fromTaskId}:${edge.toTaskId}`)
-  )
-  const blueprintEdgesSeen = new Set<string>()
-  const createdDependencyIds: string[] = []
-  const incomingDependencyTaskIds = new Set<string>()
-
-  for (const dependencyDefinition of dependencyDefinitions) {
-    const fromTaskId = definitionToTaskId.get(dependencyDefinition.fromDefinitionId)
-    const toTaskId = definitionToTaskId.get(dependencyDefinition.toDefinitionId)
-
-    if (!fromTaskId || !toTaskId) {
-      throw new Error(
-        'TemplateDependencyDefinition references missing task definition mapping'
-      )
-    }
-
-    if (fromTaskId === toTaskId) {
-      throw new Error('Self dependency is not allowed')
-    }
-
-    const edgeKey = `${fromTaskId}:${toTaskId}`
-    if (blueprintEdgesSeen.has(edgeKey) || knownEdges.has(edgeKey)) {
-      continue
-    }
-
-    blueprintEdgesSeen.add(edgeKey)
-
-    const dependency = await db.dependency.create({
-      fromTaskId,
-      toTaskId,
-      type: dependencyDefinition.type,
-      lagMinutes: dependencyDefinition.lagMinutes,
+        templateVersionId,
+        status: createdResult.status,
+        tasksCreated: createdResult.tasksCreated,
+        dependenciesCreated: createdResult.dependenciesCreated,
+        blockedTasks: createdResult.blockedTasks,
+        readyTasks: createdResult.readyTasks,
+      },
     })
 
-    knownEdges.add(edgeKey)
-    createdDependencyIds.push(dependency.id)
-    incomingDependencyTaskIds.add(dependency.toTaskId)
-  }
-
-  const blockedTaskIds = createdTaskIds.filter((taskId) =>
-    incomingDependencyTaskIds.has(taskId)
-  )
-  const readyTaskIds = createdTaskIds.filter(
-    (taskId) => !incomingDependencyTaskIds.has(taskId)
-  )
-
-  const createdTasks = await db.task.listStatesByIds(createdTaskIds)
-  const blockedTasks = createdTasks.filter((task) => blockedTaskIds.includes(task.id))
-  const readyTasks = createdTasks.filter((task) => readyTaskIds.includes(task.id))
-
-  if (blockedTaskIds.length > 0) {
-    assertTasksCanTransition(blockedTasks, 'BLOCKED', 'instantiation')
-    await db.task.setBlockedForInstantiation(blockedTaskIds)
-  }
-
-  // Ready tasks are already initialized as NOT_STARTED at creation time.
-  if (readyTasks.some((task) => task.state !== 'NOT_STARTED')) {
-    throw new Error(ILLEGAL_STATE_TRANSITION_ERROR)
-  }
-
-  return {
-    ecoId,
-    tenantId,
-    templateVersionId,
-    actorId: actorId ?? null,
-    ecoPlanId: ecoPlan.id,
-    createdEcoPlan,
-    tasksCreated: createdTaskIds.length,
-    createdTaskIds,
-    dependenciesCreated: createdDependencyIds.length,
-    createdDependencyIds,
-    blockedTasks: blockedTaskIds.length,
-    readyTasks: readyTaskIds.length,
-    status: 'created',
+    return createdResult
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    await db.audit.emitAuditEvent({
+      ecoId,
+      actorId,
+      eventType: 'INSTANTIATE_REJECTED',
+      payload: {
+        ecoId,
+        templateVersionId,
+        reasonCode: mapInstantiationReasonCode(message),
+      },
+    })
+    throw error
   }
 }
 
@@ -575,17 +654,57 @@ export async function markTaskDone({
   actorId,
 }: MarkTaskDoneInput) {
   const db = tenantDb(tenantId)
+  await db.audit.emitAuditEvent({
+    taskId,
+    actorId,
+    eventType: 'TASK_COMPLETE_ATTEMPT',
+    payload: {
+      taskId,
+      actorId,
+    },
+  })
 
   const task = await db.task.findById(taskId)
   if (!task) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        reasonCode: 'TASK_NOT_FOUND',
+      },
+    })
     throw new Error('Task not found for tenant')
   }
 
   if (task.state === 'BLOCKED') {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        reasonCode: 'TASK_BLOCKED',
+      },
+    })
     throw new Error('Cannot mark BLOCKED task as DONE')
   }
 
   if (task.state === 'DONE') {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_NOOP',
+      payload: {
+        taskId,
+        actorId,
+        status: 'noop_already_done',
+        tasksUnblocked: 0,
+      },
+    })
     return {
       taskId,
       tenantId,
@@ -616,6 +735,16 @@ export async function markTaskDone({
   const ownsTaskRole = actorRoleIds.has(task.ownerRoleId)
 
   if (!hasAdminRole && !ownsTaskRole) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        reasonCode: 'ACTOR_FORBIDDEN',
+      },
+    })
     throw new Error(TASK_COMPLETION_FORBIDDEN_ERROR)
   }
 
@@ -636,6 +765,16 @@ export async function markTaskDone({
   })
 
   if (!approvalCheckPassed) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        reasonCode: 'APPROVAL_POLICY_UNSATISFIED',
+      },
+    })
     throw new Error(APPROVAL_POLICY_NOT_SATISFIED_ERROR)
   }
 
@@ -651,6 +790,26 @@ export async function markTaskDone({
   })
 
   if (!gateCheckPassed) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'GATE_PRECONDITION_FAILED',
+      payload: {
+        taskId,
+        reasonCode: 'PRECONDITION_NOT_MET',
+        gateCount: preconditionGates.length,
+      },
+    })
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        reasonCode: 'GATE_PRECONDITION_FAILED',
+      },
+    })
     throw new Error('Precondition gate failed before marking task DONE')
   }
 
@@ -664,6 +823,17 @@ export async function markTaskDone({
     if (doneUpdateResult.count === 0) {
       const currentTask = await txDb.task.findById(taskId)
       if (currentTask?.state === 'DONE') {
+        await txDb.audit.emitAuditEvent({
+          taskId,
+          actorId,
+          eventType: 'TASK_COMPLETE_NOOP',
+          payload: {
+            taskId,
+            actorId,
+            status: 'noop_already_done',
+            tasksUnblocked: 0,
+          },
+        })
         return {
           taskMarkedDone: false as const,
           tasksUnblocked: 0,
@@ -676,6 +846,28 @@ export async function markTaskDone({
     }
 
     const cascade = await resolveDependenciesCascade({ tenantId, taskId, tx })
+    await txDb.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'CASCADE_RESOLVE',
+      payload: {
+        startingTaskId: taskId,
+        status: cascade.status,
+        tasksUnblocked: cascade.tasksUnblocked,
+        unblockedTaskIds: cascade.unblockedTaskIds,
+      },
+    })
+    await txDb.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'TASK_COMPLETE_SUCCESS',
+      payload: {
+        taskId,
+        actorId,
+        status: 'done_marked',
+        tasksUnblocked: cascade.tasksUnblocked,
+      },
+    })
     return {
       taskMarkedDone: true as const,
       tasksUnblocked: cascade.tasksUnblocked,

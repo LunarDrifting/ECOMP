@@ -19,9 +19,30 @@ export async function createApproval({
   comment,
 }: CreateApprovalInput) {
   const db = tenantDb(tenantId)
+  await db.audit.emitAuditEvent({
+    taskId,
+    actorId,
+    eventType: 'APPROVAL_CREATE_ATTEMPT',
+    payload: {
+      taskId,
+      actorId,
+      decision,
+    },
+  })
 
   const task = await db.task.findOwnerRoleById(taskId)
   if (!task) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'APPROVAL_CREATE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        decision,
+        reasonCode: 'TASK_NOT_FOUND',
+      },
+    })
     throw new Error('Task not found for tenant')
   }
 
@@ -33,6 +54,17 @@ export async function createApproval({
   )
 
   if (!actorRoleIds.has(task.ownerRoleId)) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'APPROVAL_CREATE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        decision,
+        reasonCode: 'ACTOR_FORBIDDEN',
+      },
+    })
     throw new Error(APPROVAL_CREATION_FORBIDDEN_ERROR)
   }
 
@@ -41,6 +73,19 @@ export async function createApproval({
     actorId,
     decision,
     comment,
+  })
+
+  await db.audit.emitAuditEvent({
+    taskId,
+    actorId,
+    eventType: 'APPROVAL_CREATE_SUCCESS',
+    payload: {
+      taskId,
+      actorId,
+      decision,
+      approvalId: approval.id,
+      status: 'created',
+    },
   })
 
   return {
