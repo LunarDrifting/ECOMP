@@ -6,12 +6,25 @@ type TaskRowProps = {
   onSelect: () => void
   onComplete: () => void
   completing: boolean
+  newlyReady?: boolean
+  recentlyCompleted?: boolean
 }
 
-export function TaskRow({ task, onSelect, onComplete, completing }: TaskRowProps) {
+export function TaskRow({
+  task,
+  onSelect,
+  onComplete,
+  completing,
+  newlyReady = false,
+  recentlyCompleted = false,
+}: TaskRowProps) {
   return (
     <div
-      className="grid grid-cols-[minmax(0,1.8fr)_auto_auto_auto_auto_auto] items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 transition hover:border-zinc-300 hover:shadow-sm"
+      className={[
+        'grid grid-cols-[minmax(0,1.8fr)_auto_auto_auto_auto_auto] items-center gap-3 rounded-xl border bg-white p-3 transition hover:border-zinc-300 hover:shadow-sm',
+        recentlyCompleted ? 'border-emerald-500 bg-emerald-50' : 'border-zinc-200',
+        newlyReady ? 'animate-[pulse_1.5s_ease-in-out]' : '',
+      ].join(' ')}
       style={{ transitionDuration: '180ms' }}
     >
       <button

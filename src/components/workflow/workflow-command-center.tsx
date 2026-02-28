@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   completeTask,
   fetchAuditTimeline,
@@ -12,6 +12,7 @@ import { CountBadge } from '@/components/workflow/count-badge'
 import { TaskRow } from '@/components/workflow/task-row'
 import { TaskDrawer } from '@/components/workflow/task-drawer'
 import { AuditTimeline } from '@/components/workflow/audit-timeline'
+import { GraphView } from '@/components/workflow/graph-view'
 
 type WorkflowCommandCenterProps = {
   initialTenantId?: string
@@ -33,6 +34,18 @@ export function WorkflowCommandCenter({
   const [loading, setLoading] = useState(false)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
   const [message, setMessage] = useState<string>('')
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>('list')
+  const [newlyReadyTaskIds, setNewlyReadyTaskIds] = useState<string[]>([])
+  const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([])
+  const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const tasksInOrder = useMemo(() => {
     if (!projection) {
@@ -50,7 +63,10 @@ export function WorkflowCommandCenter({
     [projection, selectedTaskId]
   )
 
-  async function refreshData() {
+  async function refreshData(options?: {
+    animateDiff?: boolean
+    previousProjection?: WorkflowProjectionResponse | null
+  }) {
     if (!tenantId || !ecoId) {
       setMessage('tenantId and ecoId are required')
       return
@@ -67,6 +83,37 @@ export function WorkflowCommandCenter({
       if (!projectionResult.ok) {
         setMessage(`Projection load failed (${projectionResult.status}): ${projectionResult.error}`)
         return
+      }
+
+      if (options?.animateDiff && options.previousProjection) {
+        const previousStateByTaskId = new Map(
+          options.previousProjection.tasks.map((task) => [task.id, task.state])
+        )
+        const nextNewlyReadyTaskIds: string[] = []
+        const nextCompletedTaskIds: string[] = []
+
+        for (const nextTask of projectionResult.data.tasks) {
+          const previousState = previousStateByTaskId.get(nextTask.id)
+          if (previousState === 'BLOCKED' && nextTask.state === 'NOT_STARTED') {
+            nextNewlyReadyTaskIds.push(nextTask.id)
+          }
+          if (previousState && previousState !== 'DONE' && nextTask.state === 'DONE') {
+            nextCompletedTaskIds.push(nextTask.id)
+          }
+        }
+
+        nextNewlyReadyTaskIds.sort()
+        nextCompletedTaskIds.sort()
+        setNewlyReadyTaskIds(nextNewlyReadyTaskIds)
+        setCompletedTaskIds(nextCompletedTaskIds)
+
+        if (animationTimeoutRef.current) {
+          clearTimeout(animationTimeoutRef.current)
+        }
+        animationTimeoutRef.current = setTimeout(() => {
+          setNewlyReadyTaskIds([])
+          setCompletedTaskIds([])
+        }, 1500)
       }
 
       setProjection(projectionResult.data)
@@ -89,6 +136,7 @@ export function WorkflowCommandCenter({
 
     setCompletingTaskId(taskId)
     setMessage('')
+    const previousProjection = projection
     try {
       const result = await completeTask({ tenantId, actorId, taskId })
       if (!result.ok) {
@@ -96,9 +144,13 @@ export function WorkflowCommandCenter({
       } else {
         setMessage(`Task updated: ${result.data.status}`)
       }
+
+      await refreshData({
+        animateDiff: result.ok,
+        previousProjection,
+      })
     } finally {
       setCompletingTaskId(null)
-      await refreshData()
     }
   }
 
@@ -113,7 +165,9 @@ export function WorkflowCommandCenter({
             </div>
             <button
               type="button"
-              onClick={refreshData}
+              onClick={() => {
+                void refreshData()
+              }}
               disabled={loading}
               className="rounded-md bg-zinc-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
             >
@@ -171,6 +225,33 @@ export function WorkflowCommandCenter({
             <CountBadge label="Ready" value={projection?.counts.readyTasks ?? 0} tone="ready" />
           </div>
 
+          <div className="mt-3 inline-flex overflow-hidden rounded-lg border border-zinc-300 text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={[
+                'px-3 py-1.5 font-semibold',
+                viewMode === 'list'
+                  ? 'bg-zinc-900 text-white'
+                  : 'bg-white text-zinc-700',
+              ].join(' ')}
+            >
+              List View
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('graph')}
+              className={[
+                'px-3 py-1.5 font-semibold',
+                viewMode === 'graph'
+                  ? 'bg-zinc-900 text-white'
+                  : 'bg-white text-zinc-700',
+              ].join(' ')}
+            >
+              Graph View
+            </button>
+          </div>
+
           {message ? (
             <p className="mt-3 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-700">{message}</p>
           ) : null}
@@ -178,15 +259,32 @@ export function WorkflowCommandCenter({
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <section className="space-y-2">
-            {tasksInOrder.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                onSelect={() => setSelectedTaskId(task.id)}
-                onComplete={() => handleComplete(task.id)}
-                completing={completingTaskId === task.id}
+            {viewMode === 'list'
+              ? tasksInOrder.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    onSelect={() => setSelectedTaskId(task.id)}
+                    onComplete={() => handleComplete(task.id)}
+                    completing={completingTaskId === task.id}
+                    newlyReady={newlyReadyTaskIds.includes(task.id)}
+                    recentlyCompleted={completedTaskIds.includes(task.id)}
+                  />
+                ))
+              : null}
+            {viewMode === 'graph' && projection ? (
+              <GraphView
+                tasks={tasksInOrder}
+                orderedTaskIds={projection.tasksTopologicalOrder}
+                dependencies={projection.dependencies}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+                onCompleteTask={handleComplete}
+                completingTaskId={completingTaskId}
+                newlyReadyTaskIds={newlyReadyTaskIds}
+                completedTaskIds={completedTaskIds}
               />
-            ))}
+            ) : null}
             {tasksInOrder.length === 0 ? (
               <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500">
                 Load projection to view tasks.

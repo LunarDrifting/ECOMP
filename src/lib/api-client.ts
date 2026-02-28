@@ -27,6 +27,10 @@ export type WorkflowProjectionResponse = {
     blockedTasks: number
     readyTasks: number
   }
+  dependencies: Array<{
+    fromTaskId: string
+    toTaskId: string
+  }>
   approvals: Array<{
     taskId: string
     actorId: string
