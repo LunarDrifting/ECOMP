@@ -12,6 +12,11 @@ type ResolveDependenciesForTaskInput = {
   taskId: string
 }
 
+type MarkTaskDoneInput = {
+  tenantId: string
+  taskId: string
+}
+
 export async function instantiateTemplateForEco({
   tenantId,
   ecoId,
@@ -277,5 +282,41 @@ export async function resolveDependenciesForTask({
     tasksUnblocked: unblockedTaskIds.length,
     unblockedTaskIds,
     status: unblockedTaskIds.length > 0 ? 'resolved' : 'noop_dependencies_pending',
+  }
+}
+
+export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
+  const db = tenantDb(tenantId)
+
+  const task = await db.task.findById(taskId)
+  if (!task) {
+    throw new Error('Task not found for tenant')
+  }
+
+  if (task.state === 'BLOCKED') {
+    throw new Error('Cannot mark BLOCKED task as DONE')
+  }
+
+  if (task.state === 'DONE') {
+    return {
+      taskId,
+      tenantId,
+      taskMarkedDone: false,
+      tasksUnblocked: 0,
+      unblockedTaskIds: [],
+      status: 'noop_already_done',
+    }
+  }
+
+  await db.task.updateStateById(taskId, 'DONE')
+  const resolution = await resolveDependenciesForTask({ tenantId, taskId })
+
+  return {
+    taskId,
+    tenantId,
+    taskMarkedDone: true,
+    tasksUnblocked: resolution.tasksUnblocked,
+    unblockedTaskIds: resolution.unblockedTaskIds,
+    status: 'done_marked',
   }
 }
