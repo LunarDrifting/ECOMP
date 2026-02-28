@@ -52,6 +52,8 @@ export async function instantiateTemplateForEco({
       createdEcoPlan,
       tasksCreated: 0,
       createdTaskIds: [],
+      dependenciesCreated: 0,
+      createdDependencyIds: [],
       status: 'noop_existing_tasks',
     }
   }
@@ -109,6 +111,47 @@ export async function instantiateTemplateForEco({
     }
   }
 
+  const dependencyDefinitions =
+    await db.templateDependencyDefinition.listByTemplateVersion(templateVersionId)
+  const existingDependencies = await db.dependency.listByTaskIds(createdTaskIds)
+  const knownEdges = new Set(
+    existingDependencies.map((edge) => `${edge.fromTaskId}:${edge.toTaskId}`)
+  )
+  const blueprintEdgesSeen = new Set<string>()
+  const createdDependencyIds: string[] = []
+
+  for (const dependencyDefinition of dependencyDefinitions) {
+    const fromTaskId = definitionToTaskId.get(dependencyDefinition.fromDefinitionId)
+    const toTaskId = definitionToTaskId.get(dependencyDefinition.toDefinitionId)
+
+    if (!fromTaskId || !toTaskId) {
+      throw new Error(
+        'TemplateDependencyDefinition references missing task definition mapping'
+      )
+    }
+
+    if (fromTaskId === toTaskId) {
+      throw new Error('Self dependency is not allowed')
+    }
+
+    const edgeKey = `${fromTaskId}:${toTaskId}`
+    if (blueprintEdgesSeen.has(edgeKey) || knownEdges.has(edgeKey)) {
+      continue
+    }
+
+    blueprintEdgesSeen.add(edgeKey)
+
+    const dependency = await db.dependency.create({
+      fromTaskId,
+      toTaskId,
+      type: dependencyDefinition.type,
+      lagMinutes: dependencyDefinition.lagMinutes,
+    })
+
+    knownEdges.add(edgeKey)
+    createdDependencyIds.push(dependency.id)
+  }
+
   return {
     ecoId,
     tenantId,
@@ -118,6 +161,8 @@ export async function instantiateTemplateForEco({
     createdEcoPlan,
     tasksCreated: createdTaskIds.length,
     createdTaskIds,
+    dependenciesCreated: createdDependencyIds.length,
+    createdDependencyIds,
     status: 'created',
   }
 }
