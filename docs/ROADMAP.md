@@ -98,3 +98,8 @@ Introduce tenant-scoped derived read models for workflow visibility without muta
 - Introduce tenant-scoped workflow projection service for ECO workflows
 - Service-layer only, no schema/model changes
 - Read-only derived workflow view with tasks, dependencies, approvals, gates, and derived flags
+
+### Phase 3.1
+- Enforce blueprint dependency graph integrity before runtime materialization
+- Service-layer only, no schema/model changes
+- Deterministic self-edge/cycle validation with fail-fast rejection before writes
