@@ -20,6 +20,7 @@ type ProjectionTaskRow = {
   isReady: boolean
   canComplete: boolean | null
 }
+type AuditPayload = Record<string, unknown>
 
 async function postInstantiate(body: Record<string, unknown>, ecoId: string) {
   const request = new NextRequest(`http://localhost/api/ecos/${ecoId}/instantiate`, {
@@ -80,6 +81,17 @@ async function getProjection(args: {
   }
 }
 
+async function listAuditEventsForEco(ecoId: string) {
+  return testPrisma.auditEvent.findMany({
+    where: { ecoId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      eventType: true,
+      payload: true,
+    },
+  })
+}
+
 describe.sequential('workflow engine integration', () => {
   it('instantiation creates tasks/dependencies and blocked+ready equals tasksCreated', async () => {
     const actors = await createTenantActorsFixture()
@@ -108,6 +120,35 @@ describe.sequential('workflow engine integration', () => {
       result.json.tasksCreated
     )
     expect(result.json.dependenciesCreated).toBe(1)
+  })
+
+  it('instantiation emits attempt and success audit events', async () => {
+    const actors = await createTenantActorsFixture()
+    const fixture = await createBlueprintFixture({
+      tenantId: actors.tenantId,
+      ownerRoleId: actors.ownerRoleId,
+      taskDefinitions: [
+        { key: 'a', name: 'Task A' },
+        { key: 'b', name: 'Task B' },
+      ],
+      dependencyDefinitions: [{ fromKey: 'a', toKey: 'b' }],
+    })
+
+    const result = await postInstantiate(
+      {
+        tenantId: actors.tenantId,
+        templateVersionId: fixture.templateVersionId,
+        actorId: actors.ownerActorId,
+      },
+      fixture.ecoId
+    )
+
+    expect(result.status).toBe(200)
+
+    const events = await listAuditEventsForEco(fixture.ecoId)
+    const eventTypes = events.map((event) => event.eventType)
+    expect(eventTypes).toContain('INSTANTIATE_ATTEMPT')
+    expect(eventTypes).toContain('INSTANTIATE_SUCCESS')
   })
 
   it('completing a BLOCKED task returns 409', async () => {
@@ -146,6 +187,95 @@ describe.sequential('workflow engine integration', () => {
 
     expect(result.status).toBe(409)
     expect(result.json.error).toContain('BLOCKED')
+  })
+
+  it('completion success emits attempt, success, and cascade audit events', async () => {
+    const actors = await createTenantActorsFixture()
+    const fixture = await createBlueprintFixture({
+      tenantId: actors.tenantId,
+      ownerRoleId: actors.ownerRoleId,
+      taskDefinitions: [
+        { key: 'a', name: 'Task A' },
+        { key: 'b', name: 'Task B' },
+      ],
+      dependencyDefinitions: [{ fromKey: 'a', toKey: 'b' }],
+    })
+
+    await postInstantiate(
+      {
+        tenantId: actors.tenantId,
+        templateVersionId: fixture.templateVersionId,
+        actorId: actors.ownerActorId,
+      },
+      fixture.ecoId
+    )
+
+    const readyTask = await testPrisma.task.findFirstOrThrow({
+      where: { ecoId: fixture.ecoId, state: 'NOT_STARTED' },
+      select: { id: true },
+    })
+
+    const completeResult = await postComplete(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+      },
+      readyTask.id
+    )
+    expect(completeResult.status).toBe(200)
+
+    const events = await listAuditEventsForEco(fixture.ecoId)
+    const eventTypes = events.map((event) => event.eventType)
+    expect(eventTypes).toContain('TASK_COMPLETE_ATTEMPT')
+    expect(eventTypes).toContain('TASK_COMPLETE_SUCCESS')
+    expect(eventTypes).toContain('CASCADE_RESOLVE')
+  })
+
+  it('completion rejection emits attempt and rejected audit events', async () => {
+    const actors = await createTenantActorsFixture()
+    const fixture = await createBlueprintFixture({
+      tenantId: actors.tenantId,
+      ownerRoleId: actors.ownerRoleId,
+      taskDefinitions: [
+        { key: 'a', name: 'Task A' },
+        { key: 'b', name: 'Task B' },
+      ],
+      dependencyDefinitions: [{ fromKey: 'a', toKey: 'b' }],
+    })
+
+    await postInstantiate(
+      {
+        tenantId: actors.tenantId,
+        templateVersionId: fixture.templateVersionId,
+        actorId: actors.ownerActorId,
+      },
+      fixture.ecoId
+    )
+
+    const blockedTask = await testPrisma.task.findFirstOrThrow({
+      where: { ecoId: fixture.ecoId, state: 'BLOCKED' },
+      select: { id: true },
+    })
+
+    const completeResult = await postComplete(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+      },
+      blockedTask.id
+    )
+    expect(completeResult.status).toBe(409)
+
+    const events = await listAuditEventsForEco(fixture.ecoId)
+    const eventTypes = events.map((event) => event.eventType)
+    expect(eventTypes).toContain('TASK_COMPLETE_ATTEMPT')
+    expect(eventTypes).toContain('TASK_COMPLETE_REJECTED')
+
+    const rejectedEvent = events.find(
+      (event) => event.eventType === 'TASK_COMPLETE_REJECTED'
+    )
+    const rejectedPayload = (rejectedEvent?.payload ?? {}) as AuditPayload
+    expect(rejectedPayload.reasonCode).toBe('TASK_BLOCKED')
   })
 
   it('completing a NOT_STARTED task succeeds and unblocks downstream when applicable', async () => {
