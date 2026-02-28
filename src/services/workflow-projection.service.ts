@@ -112,9 +112,20 @@ export async function getWorkflowProjection({
       return a.id.localeCompare(b.id)
     })
     .map((task) => task.id)
-  const fallbackOrderIndexByTaskId = new Map(
-    fallbackSortedTaskIds.map((taskId, index) => [taskId, index])
-  )
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
+  const compareTaskIdsForReadyQueue = (a: string, b: string) => {
+    const aTask = taskById.get(a)
+    const bTask = taskById.get(b)
+
+    if (aTask?.createdAt && bTask?.createdAt) {
+      const createdAtDiff = aTask.createdAt.getTime() - bTask.createdAt.getTime()
+      if (createdAtDiff !== 0) {
+        return createdAtDiff
+      }
+    }
+
+    return a.localeCompare(b)
+  }
 
   const stateByTaskId = new Map(tasks.map((task) => [task.id, task.state]))
 
@@ -172,11 +183,7 @@ export async function getWorkflowProjection({
 
   const topoQueue = taskIds
     .filter((taskId) => (indegreeByTaskId.get(taskId) ?? 0) === 0)
-    .sort(
-      (a, b) =>
-        (fallbackOrderIndexByTaskId.get(a) ?? 0) -
-        (fallbackOrderIndexByTaskId.get(b) ?? 0)
-    )
+    .sort(compareTaskIdsForReadyQueue)
   const tasksTopologicalOrder: string[] = []
 
   while (topoQueue.length > 0) {
@@ -184,21 +191,19 @@ export async function getWorkflowProjection({
     tasksTopologicalOrder.push(taskId)
 
     const downstream = adjacencyByTaskId.get(taskId) ?? new Set<string>()
+    const newlyReadyTaskIds: string[] = []
     for (const downstreamTaskId of downstream) {
       indegreeByTaskId.set(
         downstreamTaskId,
         (indegreeByTaskId.get(downstreamTaskId) ?? 1) - 1
       )
       if ((indegreeByTaskId.get(downstreamTaskId) ?? 0) === 0) {
-        topoQueue.push(downstreamTaskId)
+        newlyReadyTaskIds.push(downstreamTaskId)
       }
     }
 
-    topoQueue.sort(
-      (a, b) =>
-        (fallbackOrderIndexByTaskId.get(a) ?? 0) -
-        (fallbackOrderIndexByTaskId.get(b) ?? 0)
-    )
+    newlyReadyTaskIds.sort(compareTaskIdsForReadyQueue)
+    topoQueue.push(...newlyReadyTaskIds)
   }
 
   const deterministicTopologicalOrder =
