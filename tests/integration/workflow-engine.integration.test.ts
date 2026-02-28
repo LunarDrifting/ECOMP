@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { POST as instantiatePost } from '@/app/api/ecos/[id]/instantiate/route'
 import { POST as completePost } from '@/app/api/tasks/[id]/complete/route'
+import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
 import * as dbModule from '@/lib/db'
 import {
   createBlueprintFixture,
@@ -11,6 +12,14 @@ import {
 import { testPrisma } from '../helpers/test-db'
 
 type RouteContext = { params: Promise<{ id: string }> }
+type ProjectionTaskRow = {
+  id: string
+  upstreamTaskIds: string[]
+  downstreamTaskIds: string[]
+  blockingTaskIds: string[]
+  isReady: boolean
+  canComplete: boolean | null
+}
 
 async function postInstantiate(body: Record<string, unknown>, ecoId: string) {
   const request = new NextRequest(`http://localhost/api/ecos/${ecoId}/instantiate`, {
@@ -38,6 +47,31 @@ async function postComplete(body: Record<string, unknown>, taskId: string) {
 
   const response = await completePost(request, {
     params: Promise.resolve({ id: taskId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function getProjection(args: {
+  tenantId: string
+  ecoId: string
+  actorId?: string
+}) {
+  const query = new URLSearchParams({ tenantId: args.tenantId })
+  if (args.actorId) {
+    query.set('actorId', args.actorId)
+  }
+
+  const request = new NextRequest(
+    `http://localhost/api/ecos/${args.ecoId}/projection?${query.toString()}`,
+    { method: 'GET' }
+  )
+
+  const response = await projectionGet(request, {
+    params: Promise.resolve({ id: args.ecoId }),
   } as RouteContext)
 
   return {
@@ -508,5 +542,190 @@ describe.sequential('workflow engine integration', () => {
 
     expect(stateById.get(rootTask.id)).toBe('NOT_STARTED')
     expect(stateById.get(blockedTask.id)).toBe('BLOCKED')
+  })
+
+  it('projection returns graph fields and counts deterministically', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Projection Graph ECO', tenantId: actors.tenantId },
+    })
+
+    const taskA = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'A',
+      state: 'DONE',
+      approvalPolicy: 'NONE',
+    })
+    const taskB = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'B',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+    const taskC = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'C',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const taskD = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'D',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.dependency.createMany({
+      data: [
+        {
+          fromTaskId: taskA.id,
+          toTaskId: taskB.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          fromTaskId: taskA.id,
+          toTaskId: taskC.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+      ],
+    })
+
+    const result = await getProjection({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.json.tasksTopologicalOrder).toEqual([
+      taskA.id,
+      taskD.id,
+      taskB.id,
+      taskC.id,
+    ])
+    expect(result.json.counts).toEqual({
+      totalTasks: 4,
+      doneTasks: 1,
+      blockedTasks: 1,
+      readyTasks: 2,
+    })
+
+    const taskById = new Map(
+      (result.json.tasks as ProjectionTaskRow[]).map((task) => [task.id, task])
+    )
+
+    expect(taskById.get(taskB.id).upstreamTaskIds).toEqual([taskA.id])
+    expect(taskById.get(taskA.id).downstreamTaskIds).toEqual([taskB.id, taskC.id])
+    expect(taskById.get(taskB.id).blockingTaskIds).toEqual([])
+    expect(taskById.get(taskB.id).isReady).toBe(false)
+    expect(taskById.get(taskD.id).upstreamTaskIds).toEqual([])
+    expect(taskById.get(taskD.id).isReady).toBe(true)
+    expect(taskById.get(taskC.id).canComplete).toBeNull()
+  })
+
+  it('projection with actorId computes canComplete from state, RBAC, approvals, and gates', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Projection CanComplete ECO', tenantId: actors.tenantId },
+    })
+
+    const blockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Blocked',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+    const approvedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Approved',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'SINGLE',
+    })
+    const approvalMissingTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Approval Missing',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'SINGLE',
+    })
+    const gateFailTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Gate Fail',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const rbacDeniedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.outsiderRoleId,
+      name: 'RBAC Denied',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.approval.create({
+      data: {
+        taskId: approvedTask.id,
+        actorId: actors.ownerActorId,
+        tenantId: actors.tenantId,
+        decision: 'APPROVED',
+      },
+    })
+
+    await testPrisma.gate.createMany({
+      data: [
+        {
+          taskId: approvedTask.id,
+          tenantId: actors.tenantId,
+          type: 'PRECONDITION',
+          condition: { allow: true },
+        },
+        {
+          taskId: approvalMissingTask.id,
+          tenantId: actors.tenantId,
+          type: 'PRECONDITION',
+          condition: { allow: true },
+        },
+        {
+          taskId: gateFailTask.id,
+          tenantId: actors.tenantId,
+          type: 'PRECONDITION',
+          condition: { allow: false },
+        },
+      ],
+    })
+
+    const result = await getProjection({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      actorId: actors.ownerActorId,
+    })
+
+    expect(result.status).toBe(200)
+    const taskById = new Map(
+      (result.json.tasks as ProjectionTaskRow[]).map((task) => [task.id, task])
+    )
+
+    expect(taskById.get(blockedTask.id).canComplete).toBe(false)
+    expect(taskById.get(approvedTask.id).canComplete).toBe(true)
+    expect(taskById.get(approvalMissingTask.id).canComplete).toBe(false)
+    expect(taskById.get(gateFailTask.id).canComplete).toBe(false)
+    expect(taskById.get(rbacDeniedTask.id).canComplete).toBe(false)
   })
 })
