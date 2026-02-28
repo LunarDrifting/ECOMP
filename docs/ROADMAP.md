@@ -43,3 +43,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Implement TemplateVersion -> Task instantiation service flow
 - Service-layer only with API entrypoint
 - Enforce tenant scoping and existing service pattern
+
+### Phase 2.1
+- Introduce TemplateTaskDefinition schema for blueprint-driven instantiation
+- Schema-only changes (no business logic)
+- Hierarchical template task definitions with tenant-safe ownership paths
