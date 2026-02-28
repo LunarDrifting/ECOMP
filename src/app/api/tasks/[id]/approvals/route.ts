@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { markTaskDone } from '@/services/template-instantiation.service'
+import { createApproval } from '@/services/approval.service'
 
 type RouteContext = {
   params: Promise<{
@@ -11,19 +11,32 @@ export async function POST(req: NextRequest, context: RouteContext) {
   try {
     const { id: taskId } = await context.params
     const body = await req.json()
-    const { tenantId, actorId } = body
+    const { tenantId, actorId, decision, comment } = body
 
-    if (!taskId || !tenantId || !actorId) {
+    if (!taskId || !tenantId || !actorId || !decision) {
       return NextResponse.json(
-        { error: 'task id, tenantId, and actorId are required' },
+        { error: 'task id, tenantId, actorId, and decision are required' },
         { status: 400 }
       )
     }
 
-    const result = await markTaskDone({ tenantId, taskId, actorId })
+    if (decision !== 'APPROVED' && decision !== 'REJECTED') {
+      return NextResponse.json(
+        { error: 'decision must be APPROVED or REJECTED' },
+        { status: 400 }
+      )
+    }
+
+    const result = await createApproval({
+      tenantId,
+      taskId,
+      actorId,
+      decision,
+      comment,
+    })
 
     return NextResponse.json({
-      message: 'Task completion processed',
+      message: 'Approval created',
       ...result,
     })
   } catch (error) {
@@ -33,20 +46,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: message }, { status: 404 })
     }
 
-    if (message.includes('BLOCKED')) {
-      return NextResponse.json({ error: message }, { status: 409 })
-    }
-
     if (message.includes('Forbidden:')) {
       return NextResponse.json({ error: message }, { status: 403 })
-    }
-
-    if (message.includes('Approval required')) {
-      return NextResponse.json({ error: message }, { status: 409 })
-    }
-
-    if (message.includes('Precondition gate failed')) {
-      return NextResponse.json({ error: message }, { status: 409 })
     }
 
     return NextResponse.json({ error: message }, { status: 500 })
