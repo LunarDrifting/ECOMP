@@ -41,19 +41,73 @@ export async function instantiateTemplateForEco({
     throw new Error('ECOPlan already bound to different TemplateVersion')
   }
 
-  const adminRole =
-    (await db.role.findMany({ where: { name: 'ADMIN' }, take: 1 }))[0] ??
-    (await db.role.findMany({ take: 1 }))[0]
-
-  if (!adminRole) {
-    throw new Error('No role available for task ownership')
+  const existingTasks = await db.task.listByEcoId(ecoId)
+  if (existingTasks.length > 0) {
+    return {
+      ecoId,
+      tenantId,
+      templateVersionId,
+      actorId: actorId ?? null,
+      ecoPlanId: ecoPlan.id,
+      createdEcoPlan,
+      tasksCreated: 0,
+      createdTaskIds: [],
+      status: 'noop_existing_tasks',
+    }
   }
 
-  const rootTask = await db.task.createRootPlaceholder(
-    ecoId,
-    adminRole.id,
-    'Root Task Placeholder'
+  const definitions = await db.templateTaskDefinition.listByTemplateVersion(
+    templateVersionId
   )
+  if (definitions.length === 0) {
+    throw new Error('No TemplateTaskDefinition rows found for templateVersion')
+  }
+
+  const createdTaskIds: string[] = []
+  const definitionToTaskId = new Map<string, string>()
+  const pending = [...definitions]
+
+  while (pending.length > 0) {
+    let createdThisPass = 0
+
+    for (let i = 0; i < pending.length; i += 1) {
+      const def = pending[i]
+      const parentReady =
+        !def.parentDefinitionId ||
+        definitionToTaskId.has(def.parentDefinitionId)
+
+      if (!parentReady) {
+        continue
+      }
+
+      const parentTaskId = def.parentDefinitionId
+        ? definitionToTaskId.get(def.parentDefinitionId)
+        : undefined
+
+      const task = await db.task.createFromDefinition({
+        ecoId,
+        ownerRoleId: def.ownerRoleId,
+        name: def.name,
+        taskLevel: def.taskLevel,
+        visibility: def.visibility,
+        approvalPolicy: def.approvalPolicy,
+        clockMode: def.clockMode,
+        parentTaskId,
+      })
+
+      definitionToTaskId.set(def.id, task.id)
+      createdTaskIds.push(task.id)
+      pending.splice(i, 1)
+      i -= 1
+      createdThisPass += 1
+    }
+
+    if (createdThisPass === 0) {
+      throw new Error(
+        'Unresolvable TemplateTaskDefinition hierarchy: parent definitions missing or cyclic'
+      )
+    }
+  }
 
   return {
     ecoId,
@@ -62,6 +116,8 @@ export async function instantiateTemplateForEco({
     actorId: actorId ?? null,
     ecoPlanId: ecoPlan.id,
     createdEcoPlan,
-    task: rootTask,
+    tasksCreated: createdTaskIds.length,
+    createdTaskIds,
+    status: 'created',
   }
 }
