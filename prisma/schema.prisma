@@ -74,6 +74,7 @@ model Tenant {
   approvals Approval[]
   gates     Gate[]
   templateTaskDefinitions TemplateTaskDefinition[]
+  templateDependencyDefinitions TemplateDependencyDefinition[]
 }
 
 model User {
@@ -153,6 +154,7 @@ model TemplateVersion {
   template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
   ecoPlans ECOPlan[]
   templateTaskDefinitions TemplateTaskDefinition[]
+  templateDependencyDefinitions TemplateDependencyDefinition[]
 
   @@unique([templateId, version])
 }
@@ -282,9 +284,31 @@ model TemplateTaskDefinition {
 
   parentDefinition   TemplateTaskDefinition?  @relation("TemplateTaskDefinitionHierarchy", fields: [parentDefinitionId], references: [id], onDelete: SetNull)
   childDefinitions   TemplateTaskDefinition[] @relation("TemplateTaskDefinitionHierarchy")
+  outgoingDependencies TemplateDependencyDefinition[] @relation("TemplateDependencyFrom")
+  incomingDependencies TemplateDependencyDefinition[] @relation("TemplateDependencyTo")
 
   @@index([templateVersionId])
   @@index([tenantId])
   @@index([ownerRoleId])
   @@index([parentDefinitionId])
+}
+
+model TemplateDependencyDefinition {
+  id                String         @id @default(cuid())
+  templateVersionId String
+  tenantId          String
+  fromDefinitionId  String
+  toDefinitionId    String
+  type              DependencyType
+  lagMinutes        Int
+  createdAt         DateTime       @default(now())
+
+  templateVersion TemplateVersion      @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fromDefinition  TemplateTaskDefinition @relation("TemplateDependencyFrom", fields: [fromDefinitionId], references: [id], onDelete: Cascade)
+  toDefinition    TemplateTaskDefinition @relation("TemplateDependencyTo", fields: [toDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([fromDefinitionId])
+  @@index([toDefinitionId])
 }
