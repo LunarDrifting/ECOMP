@@ -101,6 +101,18 @@ export function tenantDb(tenantId: string) {
     },
 
     task: {
+      findById: (taskId: string) =>
+        prisma.task.findFirst({
+          where: {
+            id: taskId,
+            tenantId,
+          },
+          select: {
+            id: true,
+            state: true,
+          },
+        }),
+
       listByEcoId: (ecoId: string) =>
         prisma.task.findMany({
           where: {
@@ -161,6 +173,18 @@ export function tenantDb(tenantId: string) {
           },
           data: { state },
         }),
+
+      listStatesByIds: (taskIds: string[]) =>
+        prisma.task.findMany({
+          where: {
+            tenantId,
+            id: { in: taskIds },
+          },
+          select: {
+            id: true,
+            state: true,
+          },
+        }),
     },
 
     dependency: {
@@ -169,9 +193,36 @@ export function tenantDb(tenantId: string) {
           where: {
             fromTaskId: { in: taskIds },
             toTaskId: { in: taskIds },
+            fromTask: { tenantId },
+            toTask: { tenantId },
           },
           select: {
             id: true,
+            fromTaskId: true,
+            toTaskId: true,
+          },
+        }),
+
+      listDownstreamByFromTaskId: (fromTaskId: string) =>
+        prisma.dependency.findMany({
+          where: {
+            fromTaskId,
+            fromTask: { tenantId },
+            toTask: { tenantId },
+          },
+          select: {
+            toTaskId: true,
+          },
+        }),
+
+      listIncomingByToTaskIds: (toTaskIds: string[]) =>
+        prisma.dependency.findMany({
+          where: {
+            toTaskId: { in: toTaskIds },
+            fromTask: { tenantId },
+            toTask: { tenantId },
+          },
+          select: {
             fromTaskId: true,
             toTaskId: true,
           },
