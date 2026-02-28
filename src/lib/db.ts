@@ -62,6 +62,17 @@ export function tenantDb(tenantId: string) {
         }),
     },
 
+    templateTaskDefinition: {
+      listByTemplateVersion: (templateVersionId: string) =>
+        prisma.templateTaskDefinition.findMany({
+          where: {
+            templateVersionId,
+            tenantId,
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        }),
+    },
+
     ecoPlan: {
       findByEcoId: (ecoId: string) =>
         prisma.eCOPlan.findFirst({
@@ -79,6 +90,15 @@ export function tenantDb(tenantId: string) {
     },
 
     task: {
+      listByEcoId: (ecoId: string) =>
+        prisma.task.findMany({
+          where: {
+            ecoId,
+            tenantId,
+          },
+          select: { id: true },
+        }),
+
       createRootPlaceholder: (ecoId: string, ownerRoleId: string, name: string) =>
         prisma.task.create({
           data: {
@@ -91,6 +111,31 @@ export function tenantDb(tenantId: string) {
             visibility: 'INTERNAL_ONLY',
             approvalPolicy: 'NONE',
             clockMode: 'ACTIVE',
+          },
+        }),
+
+      createFromDefinition: (args: {
+        ecoId: string
+        ownerRoleId: string
+        name: string
+        taskLevel: any
+        visibility: any
+        approvalPolicy: any
+        clockMode: any
+        parentTaskId?: string
+      }) =>
+        prisma.task.create({
+          data: {
+            tenantId,
+            ecoId: args.ecoId,
+            ownerRoleId: args.ownerRoleId,
+            parentTaskId: args.parentTaskId ?? null,
+            name: args.name,
+            taskLevel: args.taskLevel,
+            state: 'NOT_STARTED',
+            visibility: args.visibility,
+            approvalPolicy: args.approvalPolicy,
+            clockMode: args.clockMode,
           },
         }),
     },
