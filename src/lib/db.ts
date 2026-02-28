@@ -285,6 +285,20 @@ export function tenantDb(tenantId: string) {
         }),
     },
 
+    gate: {
+      listPreconditionsByTaskId: (taskId: string) =>
+        prisma.gate.findMany({
+          where: {
+            taskId,
+            tenantId,
+            type: 'PRECONDITION',
+          },
+          select: {
+            condition: true,
+          },
+        }),
+    },
+
     userRole: prisma.userRole,
   }
 }
