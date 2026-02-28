@@ -980,16 +980,26 @@ describe.sequential('workflow engine integration', () => {
       ],
     })
 
-    const [resultA, resultB] = await Promise.all([
-      postComplete(
-        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
-        upstreamA.id
-      ),
-      postComplete(
-        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
-        upstreamB.id
-      ),
-    ])
+    const seededStates = await testPrisma.task.findMany({
+      where: { id: { in: [upstreamA.id, upstreamB.id, downstream.id] } },
+      select: { id: true, state: true },
+    })
+    const seededStateById = new Map(seededStates.map((row) => [row.id, row.state]))
+    expect(seededStateById.get(upstreamA.id)).toBe('NOT_STARTED')
+    expect(seededStateById.get(upstreamB.id)).toBe('NOT_STARTED')
+    expect(seededStateById.get(downstream.id)).toBe('BLOCKED')
+
+    const completionA = postComplete(
+      { tenantId: actors.tenantId, actorId: actors.adminActorId },
+      upstreamA.id
+    )
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const completionB = postComplete(
+      { tenantId: actors.tenantId, actorId: actors.adminActorId },
+      upstreamB.id
+    )
+
+    const [resultA, resultB] = await Promise.all([completionA, completionB])
 
     expect(resultA.status).toBe(200)
     expect(resultB.status).toBe(200)
