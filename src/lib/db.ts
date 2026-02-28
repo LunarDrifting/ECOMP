@@ -1,14 +1,19 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
-export function tenantDb(tenantId: string) {
+type TenantDbClient = Prisma.TransactionClient | typeof prisma
+
+export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
   if (!tenantId) {
     throw new Error('Tenant ID is required')
   }
 
+  const client = dbClient
+
   return {
     tenant: {
       findUnique: (args: any) =>
-        prisma.tenant.findUnique({
+        client.tenant.findUnique({
           ...args,
           where: { ...args.where, id: tenantId },
         }),
@@ -16,13 +21,13 @@ export function tenantDb(tenantId: string) {
 
     user: {
       findMany: (args: any = {}) =>
-        prisma.user.findMany({
+        client.user.findMany({
           ...args,
           where: { ...args.where, tenantId },
         }),
 
       create: (args: any) =>
-        prisma.user.create({
+        client.user.create({
           ...args,
           data: { ...args.data, tenantId },
         }),
@@ -30,13 +35,13 @@ export function tenantDb(tenantId: string) {
 
     role: {
       findMany: (args: any = {}) =>
-        prisma.role.findMany({
+        client.role.findMany({
           ...args,
           where: { ...args.where, tenantId },
         }),
 
       create: (args: any) =>
-        prisma.role.create({
+        client.role.create({
           ...args,
           data: { ...args.data, tenantId },
         }),
@@ -44,14 +49,14 @@ export function tenantDb(tenantId: string) {
 
     eco: {
       findById: (ecoId: string) =>
-        prisma.eCO.findFirst({
+        client.eCO.findFirst({
           where: { id: ecoId, tenantId },
         }),
     },
 
     templateVersion: {
       findByIdViaTemplate: (templateVersionId: string) =>
-        prisma.templateVersion.findFirst({
+        client.templateVersion.findFirst({
           where: {
             id: templateVersionId,
             template: { tenantId },
@@ -64,7 +69,7 @@ export function tenantDb(tenantId: string) {
 
     templateTaskDefinition: {
       listByTemplateVersion: (templateVersionId: string) =>
-        prisma.templateTaskDefinition.findMany({
+        client.templateTaskDefinition.findMany({
           where: {
             templateVersionId,
             tenantId,
@@ -75,7 +80,7 @@ export function tenantDb(tenantId: string) {
 
     templateDependencyDefinition: {
       listByTemplateVersion: (templateVersionId: string) =>
-        prisma.templateDependencyDefinition.findMany({
+        client.templateDependencyDefinition.findMany({
           where: {
             templateVersionId,
             tenantId,
@@ -86,12 +91,12 @@ export function tenantDb(tenantId: string) {
 
     ecoPlan: {
       findByEcoId: (ecoId: string) =>
-        prisma.eCOPlan.findFirst({
+        client.eCOPlan.findFirst({
           where: { ecoId, tenantId },
         }),
 
       create: (ecoId: string, templateVersionId: string) =>
-        prisma.eCOPlan.create({
+        client.eCOPlan.create({
           data: {
             ecoId,
             templateVersionId,
@@ -102,7 +107,7 @@ export function tenantDb(tenantId: string) {
 
     task: {
       findById: (taskId: string) =>
-        prisma.task.findFirst({
+        client.task.findFirst({
           where: {
             id: taskId,
             tenantId,
@@ -116,7 +121,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listByEcoId: (ecoId: string) =>
-        prisma.task.findMany({
+        client.task.findMany({
           where: {
             ecoId,
             tenantId,
@@ -125,7 +130,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listProjectionByEcoId: (ecoId: string) =>
-        prisma.task.findMany({
+        client.task.findMany({
           where: {
             ecoId,
             tenantId,
@@ -139,7 +144,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       createRootPlaceholder: (ecoId: string, ownerRoleId: string, name: string) =>
-        prisma.task.create({
+        client.task.create({
           data: {
             tenantId,
             ecoId,
@@ -163,7 +168,7 @@ export function tenantDb(tenantId: string) {
         clockMode: any
         parentTaskId?: string
       }) =>
-        prisma.task.create({
+        client.task.create({
           data: {
             tenantId,
             ecoId: args.ecoId,
@@ -182,7 +187,7 @@ export function tenantDb(tenantId: string) {
         taskIds: string[],
         state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
       ) =>
-        prisma.task.updateMany({
+        client.task.updateMany({
           where: {
             tenantId,
             id: { in: taskIds },
@@ -194,7 +199,7 @@ export function tenantDb(tenantId: string) {
         taskId: string,
         state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
       ) =>
-        prisma.task.updateMany({
+        client.task.updateMany({
           where: {
             tenantId,
             id: taskId,
@@ -203,7 +208,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listStatesByIds: (taskIds: string[]) =>
-        prisma.task.findMany({
+        client.task.findMany({
           where: {
             tenantId,
             id: { in: taskIds },
@@ -215,7 +220,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       findOwnerRoleById: (taskId: string) =>
-        prisma.task.findFirst({
+        client.task.findFirst({
           where: {
             id: taskId,
             tenantId,
@@ -229,7 +234,7 @@ export function tenantDb(tenantId: string) {
 
     dependency: {
       listByTaskIds: (taskIds: string[]) =>
-        prisma.dependency.findMany({
+        client.dependency.findMany({
           where: {
             fromTaskId: { in: taskIds },
             toTaskId: { in: taskIds },
@@ -244,7 +249,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listDownstreamByFromTaskId: (fromTaskId: string) =>
-        prisma.dependency.findMany({
+        client.dependency.findMany({
           where: {
             fromTaskId,
             fromTask: { tenantId },
@@ -256,7 +261,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listIncomingByToTaskIds: (toTaskIds: string[]) =>
-        prisma.dependency.findMany({
+        client.dependency.findMany({
           where: {
             toTaskId: { in: toTaskIds },
             fromTask: { tenantId },
@@ -274,7 +279,7 @@ export function tenantDb(tenantId: string) {
         type: 'FINISH_TO_START' | 'START_TO_START'
         lagMinutes: number
       }) => {
-        const scopedTasks = await prisma.task.findMany({
+        const scopedTasks = await client.task.findMany({
           where: {
             tenantId,
             id: {
@@ -288,7 +293,7 @@ export function tenantDb(tenantId: string) {
           throw new Error('Dependency task scope validation failed for tenant')
         }
 
-        return prisma.dependency.create({
+        return client.dependency.create({
           data: {
             fromTaskId: args.fromTaskId,
             toTaskId: args.toTaskId,
@@ -301,7 +306,7 @@ export function tenantDb(tenantId: string) {
 
     approval: {
       listByTaskId: (taskId: string) =>
-        prisma.approval.findMany({
+        client.approval.findMany({
           where: {
             taskId,
             tenantId,
@@ -313,7 +318,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listByTaskIds: (taskIds: string[]) =>
-        prisma.approval.findMany({
+        client.approval.findMany({
           where: {
             taskId: { in: taskIds },
             tenantId,
@@ -330,7 +335,7 @@ export function tenantDb(tenantId: string) {
         decision: 'APPROVED' | 'REJECTED'
         comment?: string | null
       }) =>
-        prisma.approval.create({
+        client.approval.create({
           data: {
             taskId: args.taskId,
             actorId: args.actorId,
@@ -352,7 +357,7 @@ export function tenantDb(tenantId: string) {
 
     gate: {
       listPreconditionsByTaskId: (taskId: string) =>
-        prisma.gate.findMany({
+        client.gate.findMany({
           where: {
             taskId,
             tenantId,
@@ -364,7 +369,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listByTaskIds: (taskIds: string[]) =>
-        prisma.gate.findMany({
+        client.gate.findMany({
           where: {
             taskId: { in: taskIds },
             tenantId,
@@ -378,7 +383,7 @@ export function tenantDb(tenantId: string) {
 
     userRole: {
       listRoleAssignmentsByUserId: (userId: string) =>
-        prisma.userRole.findMany({
+        client.userRole.findMany({
           where: {
             userId,
             role: {
@@ -396,7 +401,7 @@ export function tenantDb(tenantId: string) {
         }),
 
       listRoleAssignmentsByUserIds: (userIds: string[]) =>
-        prisma.userRole.findMany({
+        client.userRole.findMany({
           where: {
             userId: { in: userIds },
             role: {
