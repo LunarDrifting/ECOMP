@@ -307,6 +307,7 @@ export function tenantDb(tenantId: string) {
             tenantId,
           },
           select: {
+            actorId: true,
             decision: true,
           },
         }),
@@ -391,6 +392,20 @@ export function tenantDb(tenantId: string) {
                 name: true,
               },
             },
+          },
+        }),
+
+      listRoleAssignmentsByUserIds: (userIds: string[]) =>
+        prisma.userRole.findMany({
+          where: {
+            userId: { in: userIds },
+            role: {
+              tenantId,
+            },
+          },
+          select: {
+            userId: true,
+            roleId: true,
           },
         }),
     },
