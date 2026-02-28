@@ -52,23 +52,68 @@ export async function POST() {
         select: { id: true },
       }))
 
-    const existingEco = await prisma.eCO.findFirst({
+    const adminRole = await prisma.role.findFirst({
       where: {
-        title: 'Test ECO',
         tenantId: tenant.id,
+        name: 'ADMIN',
       },
       select: { id: true },
     })
 
-    const eco =
-      existingEco ??
-      (await prisma.eCO.create({
-        data: {
-          title: 'Test ECO',
-          tenantId: tenant.id,
-        },
-        select: { id: true },
-      }))
+    if (!adminRole) {
+      return NextResponse.json(
+        { error: 'ADMIN role not found for tenant' },
+        { status: 404 }
+      )
+    }
+
+    const rootDefinition = await prisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: tenant.id,
+        name: 'Root Milestone',
+        taskLevel: 'MILESTONE',
+        ownerRoleId: adminRole.id,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+      select: { id: true },
+    })
+
+    const childDefinition = await prisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: tenant.id,
+        parentDefinitionId: rootDefinition.id,
+        name: 'Child Step',
+        taskLevel: 'STEP',
+        ownerRoleId: adminRole.id,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+      select: { id: true },
+    })
+
+    await prisma.templateDependencyDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: tenant.id,
+        fromDefinitionId: rootDefinition.id,
+        toDefinitionId: childDefinition.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    const eco = await prisma.eCO.create({
+      data: {
+        title: `Test ECO ${Date.now()}`,
+        tenantId: tenant.id,
+      },
+      select: { id: true },
+    })
 
     return NextResponse.json({
       tenantId: tenant.id,
