@@ -1,6 +1,10 @@
-import { Prisma } from '@prisma/client'
+import { Prisma, TaskState } from '@prisma/client'
 import { tenantDb } from '@/lib/db'
 import { prisma } from '@/lib/prisma'
+import {
+  assertTransitionAllowed,
+  ILLEGAL_STATE_TRANSITION_ERROR,
+} from '@/services/state-transition.service'
 
 const INVALID_BLUEPRINT_GRAPH_ERROR =
   'Invalid blueprint: circular dependency detected'
@@ -109,6 +113,20 @@ type MarkTaskDoneInput = {
   tenantId: string
   taskId: string
   actorId: string
+}
+
+function assertTasksCanTransition(
+  tasks: Array<{ state: TaskState }>,
+  toState: TaskState,
+  context: 'instantiation' | 'resolver' | 'completion'
+) {
+  for (const task of tasks) {
+    assertTransitionAllowed({
+      fromState: task.state,
+      toState,
+      context,
+    })
+  }
 }
 
 function evaluateApprovalPolicy({
@@ -317,18 +335,25 @@ export async function instantiateTemplateForEco({
     incomingDependencyTaskIds.add(dependency.toTaskId)
   }
 
-  const blockedTaskIds = createdTaskIds
-    .filter((taskId) => incomingDependencyTaskIds.has(taskId))
-    .sort()
-  const readyTaskIds = createdTaskIds
-    .filter((taskId) => !incomingDependencyTaskIds.has(taskId))
-    .sort()
+  const blockedTaskIds = createdTaskIds.filter((taskId) =>
+    incomingDependencyTaskIds.has(taskId)
+  )
+  const readyTaskIds = createdTaskIds.filter(
+    (taskId) => !incomingDependencyTaskIds.has(taskId)
+  )
+
+  const createdTasks = await db.task.listStatesByIds(createdTaskIds)
+  const blockedTasks = createdTasks.filter((task) => blockedTaskIds.includes(task.id))
+  const readyTasks = createdTasks.filter((task) => readyTaskIds.includes(task.id))
 
   if (blockedTaskIds.length > 0) {
-    await db.task.updateStateForIds(blockedTaskIds, 'BLOCKED')
+    assertTasksCanTransition(blockedTasks, 'BLOCKED', 'instantiation')
+    await db.task.setBlockedForInstantiation(blockedTaskIds)
   }
-  if (readyTaskIds.length > 0) {
-    await db.task.updateStateForIds(readyTaskIds, 'NOT_STARTED')
+
+  // Ready tasks are already initialized as NOT_STARTED at creation time.
+  if (readyTasks.some((task) => task.state !== 'NOT_STARTED')) {
+    throw new Error(ILLEGAL_STATE_TRANSITION_ERROR)
   }
 
   return {
@@ -425,7 +450,11 @@ export async function resolveDependenciesForTask({
   })
 
   if (unblockedTaskIds.length > 0) {
-    await db.task.updateStateForIds(unblockedTaskIds, 'NOT_STARTED')
+    const unblockedTasks = downstreamTasks.filter((task) =>
+      unblockedTaskIds.includes(task.id)
+    )
+    assertTasksCanTransition(unblockedTasks, 'NOT_STARTED', 'resolver')
+    await db.task.setNotStartedByIdsForUnblocking(unblockedTaskIds)
   }
 
   return {
@@ -465,6 +494,12 @@ export async function markTaskDone({
       status: 'noop_already_done',
     }
   }
+
+  assertTransitionAllowed({
+    fromState: task.state,
+    toState: 'DONE',
+    context: 'completion',
+  })
 
   const actorRoleAssignments = await db.userRole.listRoleAssignmentsByUserId(
     actorId
@@ -518,7 +553,7 @@ export async function markTaskDone({
 
   const resolution = await prisma.$transaction(async (tx) => {
     const txDb = tenantDb(tenantId, tx)
-    await txDb.task.updateStateById(taskId, 'DONE')
+    await txDb.task.markDoneByIdForCompletion(taskId)
     return resolveDependenciesForTask({ tenantId, taskId, tx })
   })
 

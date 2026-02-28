@@ -3,6 +3,7 @@ import { markTaskDone } from '@/services/template-instantiation.service'
 
 const APPROVAL_POLICY_NOT_SATISFIED_ERROR =
   'Approval policy requirements not satisfied'
+const ILLEGAL_STATE_TRANSITION_ERROR = 'Illegal state transition'
 
 type RouteContext = {
   params: Promise<{
@@ -45,6 +46,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     if (message === APPROVAL_POLICY_NOT_SATISFIED_ERROR) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+
+    if (message === ILLEGAL_STATE_TRANSITION_ERROR) {
       return NextResponse.json({ error: message }, { status: 409 })
     }
 
