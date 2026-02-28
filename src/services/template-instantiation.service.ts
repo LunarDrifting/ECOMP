@@ -103,7 +103,7 @@ type InstantiateTemplateForEcoInput = {
   actorId?: string
 }
 
-type ResolveDependenciesForTaskInput = {
+type ResolveDependenciesCascadeInput = {
   tenantId: string
   taskId: string
   tx?: Prisma.TransactionClient
@@ -373,11 +373,11 @@ export async function instantiateTemplateForEco({
   }
 }
 
-export async function resolveDependenciesForTask({
+export async function resolveDependenciesCascade({
   tenantId,
   taskId,
   tx,
-}: ResolveDependenciesForTaskInput) {
+}: ResolveDependenciesCascadeInput) {
   const db = tenantDb(tenantId, tx ?? prisma)
 
   const sourceTask = await db.task.findById(taskId)
@@ -391,78 +391,181 @@ export async function resolveDependenciesForTask({
       tenantId,
       tasksUnblocked: 0,
       unblockedTaskIds: [],
-      status: 'noop_source_not_done',
+      status: 'noop_no_eligible',
     }
   }
 
-  const downstreamEdges = await db.dependency.listDownstreamByFromTaskId(taskId)
-  const downstreamTaskIds = Array.from(
-    new Set(downstreamEdges.map((edge) => edge.toTaskId))
-  ).sort()
+  const queue: string[] = [taskId]
+  const visited = new Set<string>()
+  const unblockedTaskIds = new Set<string>()
+  let sawDownstream = false
 
-  if (downstreamTaskIds.length === 0) {
-    return {
-      taskId,
-      tenantId,
-      tasksUnblocked: 0,
-      unblockedTaskIds: [],
-      status: 'noop_no_downstream_tasks',
+  // Batch strategy: traverse frontier-by-frontier and fetch graph/state/policy data
+  // in grouped queries to avoid per-task N+1 patterns.
+  while (queue.length > 0) {
+    const frontier = Array.from(new Set(queue.splice(0))).sort()
+    const unresolvedFrontier = frontier.filter((id) => !visited.has(id))
+
+    if (unresolvedFrontier.length === 0) {
+      continue
     }
-  }
 
-  const downstreamTasks = await db.task.listStatesByIds(downstreamTaskIds)
-  const blockedTaskIds = downstreamTasks
-    .filter((task) => task.state === 'BLOCKED')
-    .map((task) => task.id)
-    .sort()
-
-  if (blockedTaskIds.length === 0) {
-    return {
-      taskId,
-      tenantId,
-      tasksUnblocked: 0,
-      unblockedTaskIds: [],
-      status: 'noop_no_blocked_downstream',
+    for (const id of unresolvedFrontier) {
+      visited.add(id)
     }
-  }
 
-  const incomingDependencies = await db.dependency.listIncomingByToTaskIds(
-    blockedTaskIds
-  )
-  const upstreamTaskIds = Array.from(
-    new Set(incomingDependencies.map((edge) => edge.fromTaskId))
-  ).sort()
-  const upstreamTaskStates = await db.task.listStatesByIds(upstreamTaskIds)
-  const upstreamStateByTaskId = new Map(
-    upstreamTaskStates.map((task) => [task.id, task.state])
-  )
+    const downstreamEdges =
+      await db.dependency.listDownstreamByFromTaskIds(unresolvedFrontier)
+    if (downstreamEdges.length === 0) {
+      continue
+    }
+    sawDownstream = true
 
-  const unblockedTaskIds = blockedTaskIds.filter((downstreamTaskId) => {
-    const requiredUpstreamEdges = incomingDependencies.filter(
-      (edge) => edge.toTaskId === downstreamTaskId
+    const candidateTaskIds = Array.from(
+      new Set(downstreamEdges.map((edge) => edge.toTaskId))
+    ).sort()
+    const candidateTasks = await db.task.listResolutionFieldsByIds(candidateTaskIds)
+
+    const doneTaskIds = candidateTasks
+      .filter((task) => task.state === 'DONE')
+      .map((task) => task.id)
+      .sort()
+    queue.push(...doneTaskIds)
+
+    const blockedCandidates = candidateTasks
+      .filter((task) => task.state === 'BLOCKED')
+      .sort((a, b) => a.id.localeCompare(b.id))
+    if (blockedCandidates.length === 0) {
+      continue
+    }
+
+    const blockedCandidateIds = blockedCandidates.map((task) => task.id)
+    const incomingDependencies = await db.dependency.listIncomingByToTaskIds(
+      blockedCandidateIds
     )
-    return (
-      requiredUpstreamEdges.length > 0 &&
-      requiredUpstreamEdges.every(
-        (edge) => upstreamStateByTaskId.get(edge.fromTaskId) === 'DONE'
+    if (incomingDependencies.length === 0) {
+      continue
+    }
+
+    const upstreamTaskIds = Array.from(
+      new Set(incomingDependencies.map((edge) => edge.fromTaskId))
+    ).sort()
+    const upstreamTaskStates = await db.task.listStatesByIds(upstreamTaskIds)
+    const upstreamStateByTaskId = new Map(
+      upstreamTaskStates.map((task) => [task.id, task.state])
+    )
+
+    const dependencySatisfiedTaskIds = blockedCandidateIds.filter((candidateTaskId) => {
+      const requiredEdges = incomingDependencies.filter(
+        (edge) => edge.toTaskId === candidateTaskId
       )
-    )
-  })
 
-  if (unblockedTaskIds.length > 0) {
-    const unblockedTasks = downstreamTasks.filter((task) =>
-      unblockedTaskIds.includes(task.id)
+      return (
+        requiredEdges.length > 0 &&
+        requiredEdges.every(
+          (edge) => upstreamStateByTaskId.get(edge.fromTaskId) === 'DONE'
+        )
+      )
+    })
+
+    if (dependencySatisfiedTaskIds.length === 0) {
+      continue
+    }
+
+    const dependencySatisfiedSet = new Set(dependencySatisfiedTaskIds)
+    const dependencySatisfiedTasks = blockedCandidates.filter((task) =>
+      dependencySatisfiedSet.has(task.id)
     )
-    assertTasksCanTransition(unblockedTasks, 'NOT_STARTED', 'resolver')
-    await db.task.setNotStartedByIdsForUnblocking(unblockedTaskIds)
+
+    const approvals = await db.approval.listByTaskIdsForPolicy(
+      dependencySatisfiedTaskIds
+    )
+    const approvalActorIds = Array.from(
+      new Set(approvals.map((approval) => approval.actorId))
+    ).sort()
+    const approvalActorRoles =
+      approvalActorIds.length > 0
+        ? await db.userRole.listRoleAssignmentsByUserIds(approvalActorIds)
+        : []
+
+    const approvalsByTaskId = new Map<
+      string,
+      Array<{ actorId: string; decision: 'APPROVED' | 'REJECTED' }>
+    >()
+    for (const approval of approvals) {
+      const taskApprovals = approvalsByTaskId.get(approval.taskId) ?? []
+      taskApprovals.push({
+        actorId: approval.actorId,
+        decision: approval.decision,
+      })
+      approvalsByTaskId.set(approval.taskId, taskApprovals)
+    }
+
+    const preconditionGates = await db.gate.listPreconditionsByTaskIds(
+      dependencySatisfiedTaskIds
+    )
+    const gatesByTaskId = new Map<string, Array<{ condition: unknown }>>()
+    for (const gate of preconditionGates) {
+      const taskGates = gatesByTaskId.get(gate.taskId) ?? []
+      taskGates.push({ condition: gate.condition })
+      gatesByTaskId.set(gate.taskId, taskGates)
+    }
+
+    const eligibleTasks = dependencySatisfiedTasks.filter((task) => {
+      const approvalCheckPassed = evaluateApprovalPolicy({
+        approvalPolicy: task.approvalPolicy,
+        ownerRoleId: task.ownerRoleId,
+        approvals: approvalsByTaskId.get(task.id) ?? [],
+        actorRoles: approvalActorRoles,
+      })
+
+      if (!approvalCheckPassed) {
+        return false
+      }
+
+      const taskGates = gatesByTaskId.get(task.id) ?? []
+      return taskGates.every((gate) => {
+        const condition = gate.condition
+        return (
+          !!condition &&
+          typeof condition === 'object' &&
+          'allow' in condition &&
+          (condition as { allow?: unknown }).allow === true
+        )
+      })
+    })
+
+    if (eligibleTasks.length === 0) {
+      continue
+    }
+
+    assertTasksCanTransition(eligibleTasks, 'NOT_STARTED', 'resolver')
+
+    const idsToUnblock = eligibleTasks
+      .map((task) => task.id)
+      .sort((a, b) => a.localeCompare(b))
+    await db.task.setNotStartedByIdsForUnblocking(idsToUnblock)
+
+    for (const id of idsToUnblock) {
+      unblockedTaskIds.add(id)
+    }
+
+    queue.push(...idsToUnblock)
   }
+
+  const orderedUnblockedTaskIds = Array.from(unblockedTaskIds).sort()
+  const status = !sawDownstream
+    ? 'noop_no_downstream'
+    : orderedUnblockedTaskIds.length > 0
+      ? 'resolved'
+      : 'noop_no_eligible'
 
   return {
     taskId,
     tenantId,
-    tasksUnblocked: unblockedTaskIds.length,
-    unblockedTaskIds,
-    status: unblockedTaskIds.length > 0 ? 'resolved' : 'noop_dependencies_pending',
+    tasksUnblocked: orderedUnblockedTaskIds.length,
+    unblockedTaskIds: orderedUnblockedTaskIds,
+    status,
   }
 }
 
@@ -554,7 +657,7 @@ export async function markTaskDone({
   const resolution = await prisma.$transaction(async (tx) => {
     const txDb = tenantDb(tenantId, tx)
     await txDb.task.markDoneByIdForCompletion(taskId)
-    return resolveDependenciesForTask({ tenantId, taskId, tx })
+    return resolveDependenciesCascade({ tenantId, taskId, tx })
   })
 
   return {
@@ -567,4 +670,10 @@ export async function markTaskDone({
     gateCheckPassed: true,
     status: 'done_marked',
   }
+}
+
+export async function resolveDependenciesForTask(
+  input: ResolveDependenciesCascadeInput
+) {
+  return resolveDependenciesCascade(input)
 }
