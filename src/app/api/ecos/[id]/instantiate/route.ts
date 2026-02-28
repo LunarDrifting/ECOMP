@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { instantiateTemplateForEco } from '@/services/template-instantiation.service'
 
+const INVALID_BLUEPRINT_GRAPH_ERROR =
+  'Invalid blueprint: circular dependency detected'
+
 type RouteContext = {
   params: Promise<{
     id: string
@@ -39,6 +42,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     if (message.includes('different TemplateVersion')) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+
+    if (message === INVALID_BLUEPRINT_GRAPH_ERROR) {
       return NextResponse.json({ error: message }, { status: 409 })
     }
 
