@@ -88,3 +88,13 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Enforce PRECONDITION gates in markTaskDone before DONE transitions
 - Service-layer only, no schema/model changes
 - Minimal gate evaluator with deterministic gate-failure rejection behavior
+
+## Milestone 3 — Workflow Projection / Read Models
+
+Goal:
+Introduce tenant-scoped derived read models for workflow visibility without mutating write-side state.
+
+### Phase 3.0
+- Introduce tenant-scoped workflow projection service for ECO workflows
+- Service-layer only, no schema/model changes
+- Read-only derived workflow view with tasks, dependencies, approvals, gates, and derived flags
