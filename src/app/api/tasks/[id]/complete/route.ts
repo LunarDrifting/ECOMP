@@ -37,6 +37,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: message }, { status: 409 })
     }
 
+    if (message.includes('Approval required')) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
