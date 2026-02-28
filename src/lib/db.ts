@@ -194,6 +194,7 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
           select: {
             id: true,
+            name: true,
             ownerRoleId: true,
             state: true,
             approvalPolicy: true,
@@ -599,6 +600,24 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           return { emitted: false, reason: 'INSERT_FAILED' as const }
         }
       },
+
+      listByEcoId: (ecoId: string, limit = 50) =>
+        client.auditEvent.findMany({
+          where: {
+            ecoId,
+            eco: {
+              tenantId,
+            },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: Math.min(Math.max(limit, 1), 200),
+          select: {
+            id: true,
+            eventType: true,
+            payload: true,
+            createdAt: true,
+          },
+        }),
     },
   }
 }
