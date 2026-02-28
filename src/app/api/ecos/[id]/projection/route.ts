@@ -11,6 +11,7 @@ export async function GET(req: NextRequest, context: RouteContext) {
   try {
     const { id: ecoId } = await context.params
     const tenantId = req.nextUrl.searchParams.get('tenantId')
+    const actorId = req.nextUrl.searchParams.get('actorId')
 
     if (!ecoId || !tenantId) {
       return NextResponse.json(
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest, context: RouteContext) {
       )
     }
 
-    const result = await getWorkflowProjection({ tenantId, ecoId })
+    const result = await getWorkflowProjection({ tenantId, ecoId, actorId })
     return NextResponse.json(result)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
