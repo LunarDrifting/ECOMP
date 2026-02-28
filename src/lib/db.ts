@@ -164,12 +164,24 @@ export function tenantDb(tenantId: string) {
 
       updateStateForIds: (
         taskIds: string[],
-        state: 'NOT_STARTED' | 'BLOCKED'
+        state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
       ) =>
         prisma.task.updateMany({
           where: {
             tenantId,
             id: { in: taskIds },
+          },
+          data: { state },
+        }),
+
+      updateStateById: (
+        taskId: string,
+        state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
+      ) =>
+        prisma.task.updateMany({
+          where: {
+            tenantId,
+            id: taskId,
           },
           data: { state },
         }),
