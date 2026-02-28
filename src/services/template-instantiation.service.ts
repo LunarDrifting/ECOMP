@@ -4,6 +4,8 @@ const INVALID_BLUEPRINT_GRAPH_ERROR =
   'Invalid blueprint: circular dependency detected'
 const TASK_COMPLETION_FORBIDDEN_ERROR =
   'Forbidden: actor not authorized to complete task'
+const APPROVAL_POLICY_NOT_SATISFIED_ERROR =
+  'Approval policy requirements not satisfied'
 
 type BlueprintTaskDefinition = {
   id: string
@@ -104,6 +106,57 @@ type MarkTaskDoneInput = {
   tenantId: string
   taskId: string
   actorId: string
+}
+
+function evaluateApprovalPolicy({
+  approvalPolicy,
+  ownerRoleId,
+  approvals,
+  actorRoles,
+}: {
+  approvalPolicy: 'NONE' | 'SINGLE' | 'SEQUENTIAL' | 'PARALLEL' | 'QUORUM'
+  ownerRoleId: string
+  approvals: Array<{ actorId: string; decision: 'APPROVED' | 'REJECTED' }>
+  actorRoles: Array<{ userId: string; roleId: string }>
+}) {
+  if (approvalPolicy === 'NONE') {
+    return true
+  }
+
+  const approvedApprovals = approvals.filter(
+    (approval) => approval.decision === 'APPROVED'
+  )
+
+  if (approvalPolicy === 'SINGLE') {
+    return approvedApprovals.length > 0
+  }
+
+  if (approvalPolicy === 'SEQUENTIAL') {
+    const hasRejected = approvals.some((approval) => approval.decision === 'REJECTED')
+    return !hasRejected && approvedApprovals.length > 0
+  }
+
+  if (approvalPolicy === 'PARALLEL') {
+    const roleIdsByActorId = new Map<string, Set<string>>()
+    for (const assignment of actorRoles) {
+      const roleIds = roleIdsByActorId.get(assignment.userId) ?? new Set<string>()
+      roleIds.add(assignment.roleId)
+      roleIdsByActorId.set(assignment.userId, roleIds)
+    }
+
+    return approvedApprovals.some((approval) =>
+      roleIdsByActorId.get(approval.actorId)?.has(ownerRoleId)
+    )
+  }
+
+  if (approvalPolicy === 'QUORUM') {
+    const distinctApprovedActors = new Set(
+      approvedApprovals.map((approval) => approval.actorId)
+    )
+    return distinctApprovedActors.size >= 2
+  }
+
+  return false
 }
 
 export async function instantiateTemplateForEco({
@@ -424,18 +477,24 @@ export async function markTaskDone({
     throw new Error(TASK_COMPLETION_FORBIDDEN_ERROR)
   }
 
-  let approvalCheckPassed = false
-  if (task.approvalPolicy === 'NONE') {
-    approvalCheckPassed = true
-  } else {
-    const approvals = await db.approval.listByTaskId(taskId)
-    approvalCheckPassed = approvals.some(
-      (approval) => approval.decision === 'APPROVED'
-    )
-  }
+  const approvals = await db.approval.listByTaskId(taskId)
+  const approvalActorIds = Array.from(
+    new Set(approvals.map((approval) => approval.actorId))
+  ).sort()
+  const approvalActorRoles =
+    approvalActorIds.length > 0
+      ? await db.userRole.listRoleAssignmentsByUserIds(approvalActorIds)
+      : []
+
+  const approvalCheckPassed = evaluateApprovalPolicy({
+    approvalPolicy: task.approvalPolicy,
+    ownerRoleId: task.ownerRoleId,
+    approvals,
+    actorRoles: approvalActorRoles,
+  })
 
   if (!approvalCheckPassed) {
-    throw new Error('Approval required before marking task DONE')
+    throw new Error(APPROVAL_POLICY_NOT_SATISFIED_ERROR)
   }
 
   const preconditionGates = await db.gate.listPreconditionsByTaskId(taskId)
