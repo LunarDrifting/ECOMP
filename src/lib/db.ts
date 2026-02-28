@@ -109,6 +109,7 @@ export function tenantDb(tenantId: string) {
           },
           select: {
             id: true,
+            ownerRoleId: true,
             state: true,
             approvalPolicy: true,
           },
@@ -212,6 +213,18 @@ export function tenantDb(tenantId: string) {
             state: true,
           },
         }),
+
+      findOwnerRoleById: (taskId: string) =>
+        prisma.task.findFirst({
+          where: {
+            id: taskId,
+            tenantId,
+          },
+          select: {
+            id: true,
+            ownerRoleId: true,
+          },
+        }),
     },
 
     dependency: {
@@ -309,6 +322,31 @@ export function tenantDb(tenantId: string) {
             decision: true,
           },
         }),
+
+      createForTask: (args: {
+        taskId: string
+        actorId: string
+        decision: 'APPROVED' | 'REJECTED'
+        comment?: string | null
+      }) =>
+        prisma.approval.create({
+          data: {
+            taskId: args.taskId,
+            actorId: args.actorId,
+            tenantId,
+            decision: args.decision,
+            comment: args.comment ?? null,
+          },
+          select: {
+            id: true,
+            taskId: true,
+            actorId: true,
+            tenantId: true,
+            decision: true,
+            comment: true,
+            createdAt: true,
+          },
+        }),
     },
 
     gate: {
@@ -337,6 +375,24 @@ export function tenantDb(tenantId: string) {
         }),
     },
 
-    userRole: prisma.userRole,
+    userRole: {
+      listRoleAssignmentsByUserId: (userId: string) =>
+        prisma.userRole.findMany({
+          where: {
+            userId,
+            role: {
+              tenantId,
+            },
+          },
+          select: {
+            roleId: true,
+            role: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        }),
+    },
   }
 }
