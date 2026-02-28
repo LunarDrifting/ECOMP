@@ -203,11 +203,12 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           data: { state: 'NOT_STARTED' },
         }),
 
-      markDoneByIdForCompletion: (taskId: string) =>
+      markDoneByIdIfNotStartedForCompletion: (taskId: string) =>
         client.task.updateMany({
           where: {
             tenantId,
             id: taskId,
+            state: 'NOT_STARTED',
           },
           data: { state: 'DONE' },
         }),

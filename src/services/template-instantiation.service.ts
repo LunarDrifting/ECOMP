@@ -656,19 +656,43 @@ export async function markTaskDone({
 
   const resolution = await prisma.$transaction(async (tx) => {
     const txDb = tenantDb(tenantId, tx)
-    await txDb.task.markDoneByIdForCompletion(taskId)
-    return resolveDependenciesCascade({ tenantId, taskId, tx })
+    const doneUpdateResult = await txDb.task.markDoneByIdIfNotStartedForCompletion(
+      taskId
+    )
+
+    // If another transaction already marked this task DONE, return deterministic no-op.
+    if (doneUpdateResult.count === 0) {
+      const currentTask = await txDb.task.findById(taskId)
+      if (currentTask?.state === 'DONE') {
+        return {
+          taskMarkedDone: false as const,
+          tasksUnblocked: 0,
+          unblockedTaskIds: [] as string[],
+          status: 'noop_already_done' as const,
+        }
+      }
+
+      throw new Error(ILLEGAL_STATE_TRANSITION_ERROR)
+    }
+
+    const cascade = await resolveDependenciesCascade({ tenantId, taskId, tx })
+    return {
+      taskMarkedDone: true as const,
+      tasksUnblocked: cascade.tasksUnblocked,
+      unblockedTaskIds: cascade.unblockedTaskIds,
+      status: 'done_marked' as const,
+    }
   })
 
   return {
     taskId,
     tenantId,
-    taskMarkedDone: true,
+    taskMarkedDone: resolution.taskMarkedDone,
     tasksUnblocked: resolution.tasksUnblocked,
     unblockedTaskIds: resolution.unblockedTaskIds,
     approvalCheckPassed: true,
     gateCheckPassed: true,
-    status: 'done_marked',
+    status: resolution.status,
   }
 }
 
