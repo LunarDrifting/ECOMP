@@ -149,6 +149,18 @@ export function tenantDb(tenantId: string) {
             clockMode: args.clockMode,
           },
         }),
+
+      updateStateForIds: (
+        taskIds: string[],
+        state: 'NOT_STARTED' | 'BLOCKED'
+      ) =>
+        prisma.task.updateMany({
+          where: {
+            tenantId,
+            id: { in: taskIds },
+          },
+          data: { state },
+        }),
     },
 
     dependency: {
