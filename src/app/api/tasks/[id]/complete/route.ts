@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { markTaskDone } from '@/services/template-instantiation.service'
 
+const APPROVAL_POLICY_NOT_SATISFIED_ERROR =
+  'Approval policy requirements not satisfied'
+
 type RouteContext = {
   params: Promise<{
     id: string
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: message }, { status: 403 })
     }
 
-    if (message.includes('Approval required')) {
+    if (message === APPROVAL_POLICY_NOT_SATISFIED_ERROR) {
       return NextResponse.json({ error: message }, { status: 409 })
     }
 
