@@ -2,6 +2,50 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
 type TenantDbClient = Prisma.TransactionClient | typeof prisma
+type JsonPrimitive = string | number | boolean | null
+type JsonLike = JsonPrimitive | JsonLike[] | { [key: string]: JsonLike }
+
+function sanitizeAuditPayload(input: Record<string, unknown>): Record<string, JsonLike> {
+  const toJsonLike = (value: unknown): JsonLike => {
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      return value
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => toJsonLike(item))
+    }
+
+    if (value && typeof value === 'object') {
+      const output: Record<string, JsonLike> = {}
+      for (const [key, entry] of Object.entries(value)) {
+        output[key] = toJsonLike(entry)
+      }
+      return output
+    }
+
+    return String(value)
+  }
+
+  const sanitized: Record<string, JsonLike> = {}
+  for (const [key, value] of Object.entries(input)) {
+    sanitized[key] = toJsonLike(value)
+  }
+
+  const payloadSize = Buffer.byteLength(JSON.stringify(sanitized), 'utf8')
+  if (payloadSize <= 4096) {
+    return sanitized
+  }
+
+  return {
+    status: 'payload_truncated',
+    originalSizeBytes: payloadSize,
+  }
+}
 
 export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
   if (!tenantId) {
@@ -51,6 +95,19 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
       findById: (ecoId: string) =>
         client.eCO.findFirst({
           where: { id: ecoId, tenantId },
+        }),
+
+      findByTaskId: (taskId: string) =>
+        client.eCO.findFirst({
+          where: {
+            tenantId,
+            tasks: {
+              some: { id: taskId },
+            },
+          },
+          select: {
+            id: true,
+          },
         }),
     },
 
@@ -486,6 +543,62 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
             roleId: true,
           },
         }),
+    },
+
+    audit: {
+      emitAuditEvent: async (args: {
+        eventType: string
+        payload: Record<string, unknown>
+        ecoId?: string
+        taskId?: string
+        actorId?: string
+      }) => {
+        try {
+          let resolvedEcoId: string | undefined = args.ecoId
+
+          if (resolvedEcoId) {
+            const eco = await client.eCO.findFirst({
+              where: {
+                id: resolvedEcoId,
+                tenantId,
+              },
+              select: { id: true },
+            })
+
+            if (!eco) {
+              return { emitted: false, reason: 'MISSING_ECO_SCOPE' as const }
+            }
+          } else if (args.taskId) {
+            const eco = await client.eCO.findFirst({
+              where: {
+                tenantId,
+                tasks: {
+                  some: { id: args.taskId },
+                },
+              },
+              select: { id: true },
+            })
+            resolvedEcoId = eco?.id
+          }
+
+          if (!resolvedEcoId) {
+            return { emitted: false, reason: 'MISSING_ECO_SCOPE' as const }
+          }
+
+          await client.auditEvent.create({
+            data: {
+              ecoId: resolvedEcoId,
+              eventType: args.eventType,
+              actorId: args.actorId ?? null,
+              payload: sanitizeAuditPayload(args.payload),
+            },
+          })
+
+          return { emitted: true as const }
+        } catch {
+          return { emitted: false, reason: 'INSERT_FAILED' as const }
+        }
+      },
     },
   }
 }
