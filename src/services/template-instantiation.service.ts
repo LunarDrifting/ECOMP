@@ -304,8 +304,23 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
       taskMarkedDone: false,
       tasksUnblocked: 0,
       unblockedTaskIds: [],
+      approvalCheckPassed: false,
       status: 'noop_already_done',
     }
+  }
+
+  let approvalCheckPassed = false
+  if (task.approvalPolicy === 'NONE') {
+    approvalCheckPassed = true
+  } else {
+    const approvals = await db.approval.listByTaskId(taskId)
+    approvalCheckPassed = approvals.some(
+      (approval) => approval.decision === 'APPROVED'
+    )
+  }
+
+  if (!approvalCheckPassed) {
+    throw new Error('Approval required before marking task DONE')
   }
 
   await db.task.updateStateById(taskId, 'DONE')
@@ -317,6 +332,7 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
     taskMarkedDone: true,
     tasksUnblocked: resolution.tasksUnblocked,
     unblockedTaskIds: resolution.unblockedTaskIds,
+    approvalCheckPassed: true,
     status: 'done_marked',
   }
 }
