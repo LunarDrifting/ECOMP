@@ -44,7 +44,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     if (
       message.includes('Unresolvable TemplateTaskDefinition hierarchy') ||
-      message.includes('No TemplateTaskDefinition rows found')
+      message.includes('No TemplateTaskDefinition rows found') ||
+      message.includes('TemplateDependencyDefinition references missing') ||
+      message.includes('Self dependency is not allowed')
     ) {
       return NextResponse.json({ error: message }, { status: 422 })
     }
