@@ -73,3 +73,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Implement runtime dependency resolution to unblock downstream tasks after upstream completion
 - Service-layer only, no schema/model changes
 - Targeted downstream reevaluation with deterministic unblocking
+
+### Phase 2.7
+- Add canonical DONE transition endpoint and service method for task completion
+- Service-layer only, no schema/model changes
+- DONE transition triggers runtime dependency resolution and returns unblock results
