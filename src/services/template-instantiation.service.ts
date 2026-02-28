@@ -305,6 +305,7 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
       tasksUnblocked: 0,
       unblockedTaskIds: [],
       approvalCheckPassed: false,
+      gateCheckPassed: false,
       status: 'noop_already_done',
     }
   }
@@ -323,6 +324,21 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
     throw new Error('Approval required before marking task DONE')
   }
 
+  const preconditionGates = await db.gate.listPreconditionsByTaskId(taskId)
+  const gateCheckPassed = preconditionGates.every((gate) => {
+    const condition = gate.condition
+    return (
+      !!condition &&
+      typeof condition === 'object' &&
+      'allow' in condition &&
+      (condition as { allow?: unknown }).allow === true
+    )
+  })
+
+  if (!gateCheckPassed) {
+    throw new Error('Precondition gate failed before marking task DONE')
+  }
+
   await db.task.updateStateById(taskId, 'DONE')
   const resolution = await resolveDependenciesForTask({ tenantId, taskId })
 
@@ -333,6 +349,7 @@ export async function markTaskDone({ tenantId, taskId }: MarkTaskDoneInput) {
     tasksUnblocked: resolution.tasksUnblocked,
     unblockedTaskIds: resolution.unblockedTaskIds,
     approvalCheckPassed: true,
+    gateCheckPassed: true,
     status: 'done_marked',
   }
 }
