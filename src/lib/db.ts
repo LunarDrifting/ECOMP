@@ -123,6 +123,20 @@ export function tenantDb(tenantId: string) {
           select: { id: true },
         }),
 
+      listProjectionByEcoId: (ecoId: string) =>
+        prisma.task.findMany({
+          where: {
+            ecoId,
+            tenantId,
+          },
+          select: {
+            id: true,
+            state: true,
+            approvalPolicy: true,
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        }),
+
       createRootPlaceholder: (ecoId: string, ownerRoleId: string, name: string) =>
         prisma.task.create({
           data: {
@@ -283,6 +297,18 @@ export function tenantDb(tenantId: string) {
             decision: true,
           },
         }),
+
+      listByTaskIds: (taskIds: string[]) =>
+        prisma.approval.findMany({
+          where: {
+            taskId: { in: taskIds },
+            tenantId,
+          },
+          select: {
+            taskId: true,
+            decision: true,
+          },
+        }),
     },
 
     gate: {
@@ -295,6 +321,18 @@ export function tenantDb(tenantId: string) {
           },
           select: {
             condition: true,
+          },
+        }),
+
+      listByTaskIds: (taskIds: string[]) =>
+        prisma.gate.findMany({
+          where: {
+            taskId: { in: taskIds },
+            tenantId,
+          },
+          select: {
+            taskId: true,
+            type: true,
           },
         }),
     },
