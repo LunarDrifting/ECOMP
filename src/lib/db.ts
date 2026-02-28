@@ -183,28 +183,31 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
         }),
 
-      updateStateForIds: (
-        taskIds: string[],
-        state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
-      ) =>
+      setBlockedForInstantiation: (taskIds: string[]) =>
         client.task.updateMany({
           where: {
             tenantId,
             id: { in: taskIds },
           },
-          data: { state },
+          data: { state: 'BLOCKED' },
         }),
 
-      updateStateById: (
-        taskId: string,
-        state: 'NOT_STARTED' | 'BLOCKED' | 'DONE'
-      ) =>
+      setNotStartedByIdsForUnblocking: (taskIds: string[]) =>
+        client.task.updateMany({
+          where: {
+            tenantId,
+            id: { in: taskIds },
+          },
+          data: { state: 'NOT_STARTED' },
+        }),
+
+      markDoneByIdForCompletion: (taskId: string) =>
         client.task.updateMany({
           where: {
             tenantId,
             id: taskId,
           },
-          data: { state },
+          data: { state: 'DONE' },
         }),
 
       listStatesByIds: (taskIds: string[]) =>
