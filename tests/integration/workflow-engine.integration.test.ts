@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { POST as instantiatePost } from '@/app/api/ecos/[id]/instantiate/route'
 import { POST as completePost } from '@/app/api/tasks/[id]/complete/route'
+import * as dbModule from '@/lib/db'
 import {
   createBlueprintFixture,
   createTaskFixture,
@@ -319,5 +320,193 @@ describe.sequential('workflow engine integration', () => {
     expect(ecoPlanCount).toBe(0)
     expect(taskCount).toBe(0)
     expect(dependencyCount).toBe(0)
+  })
+
+  it('completing a root task performs deterministic multi-hop cascade resolution', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Cascade ECO', tenantId: actors.tenantId },
+    })
+
+    const rootTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'A-root',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+
+    const doneBridgeTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'B-done-bridge',
+      state: 'DONE',
+      approvalPolicy: 'NONE',
+    })
+
+    const twoHopBlockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'C-two-hop-blocked',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    const directBlockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'G-direct-blocked',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    const stillBlockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'D-should-stay-blocked',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.dependency.createMany({
+      data: [
+        {
+          fromTaskId: rootTask.id,
+          toTaskId: doneBridgeTask.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          fromTaskId: doneBridgeTask.id,
+          toTaskId: twoHopBlockedTask.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          fromTaskId: rootTask.id,
+          toTaskId: directBlockedTask.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          fromTaskId: twoHopBlockedTask.id,
+          toTaskId: stillBlockedTask.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+      ],
+    })
+
+    const result = await postComplete(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+      },
+      rootTask.id
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.json.taskMarkedDone).toBe(true)
+    expect(result.json.tasksUnblocked).toBe(2)
+
+    const expectedUnblockedIds = [directBlockedTask.id, twoHopBlockedTask.id].sort()
+    expect(result.json.unblockedTaskIds).toEqual(expectedUnblockedIds)
+
+    const finalStates = await testPrisma.task.findMany({
+      where: {
+        id: {
+          in: [twoHopBlockedTask.id, directBlockedTask.id, stillBlockedTask.id],
+        },
+      },
+      select: { id: true, state: true },
+    })
+    const stateById = new Map(finalStates.map((row) => [row.id, row.state]))
+
+    expect(stateById.get(twoHopBlockedTask.id)).toBe('NOT_STARTED')
+    expect(stateById.get(directBlockedTask.id)).toBe('NOT_STARTED')
+    expect(stateById.get(stillBlockedTask.id)).toBe('BLOCKED')
+  })
+
+  it('injected mid-cascade failure rolls back DONE and unblock writes atomically', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Rollback ECO', tenantId: actors.tenantId },
+    })
+
+    const rootTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Rollback root',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+
+    const blockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Rollback blocked child',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.dependency.create({
+      data: {
+        fromTaskId: rootTask.id,
+        toTaskId: blockedTask.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    const realTenantDb = dbModule.tenantDb
+    const tenantDbSpy = vi.spyOn(dbModule, 'tenantDb')
+    tenantDbSpy.mockImplementation((tenantId, dbClient) => {
+      const scoped = realTenantDb(tenantId, dbClient)
+
+      if (!dbClient) {
+        return scoped
+      }
+
+      return {
+        ...scoped,
+        task: {
+          ...scoped.task,
+          setNotStartedByIdsForUnblocking: async () => {
+            throw new Error('Injected cascade failure')
+          },
+        },
+      }
+    })
+
+    try {
+      const result = await postComplete(
+        {
+          tenantId: actors.tenantId,
+          actorId: actors.ownerActorId,
+        },
+        rootTask.id
+      )
+
+      expect(result.status).toBe(500)
+      expect(result.json.error).toBe('Injected cascade failure')
+    } finally {
+      tenantDbSpy.mockRestore()
+    }
+
+    const reloaded = await testPrisma.task.findMany({
+      where: { id: { in: [rootTask.id, blockedTask.id] } },
+      select: { id: true, state: true },
+    })
+    const stateById = new Map(reloaded.map((row) => [row.id, row.state]))
+
+    expect(stateById.get(rootTask.id)).toBe('NOT_STARTED')
+    expect(stateById.get(blockedTask.id)).toBe('BLOCKED')
   })
 })
