@@ -83,3 +83,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Enforce approval requirements in markTaskDone before DONE transitions
 - Service-layer only, no schema/model changes
 - Approval-aware completion checks with deterministic rejection semantics
+
+### Phase 2.9
+- Enforce PRECONDITION gates in markTaskDone before DONE transitions
+- Service-layer only, no schema/model changes
+- Minimal gate evaluator with deterministic gate-failure rejection behavior
