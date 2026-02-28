@@ -58,3 +58,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Introduce TemplateDependencyDefinition schema for blueprint dependency graphs
 - Schema-only changes (no business logic)
 - Tenant-scoped dependency blueprint links between template task definitions
+
+### Phase 2.4
+- Materialize runtime Dependency rows from blueprint dependency definitions during instantiation
+- Service-layer only, no schema/model changes
+- Tenant-scoped dependency creation with idempotent instantiation behavior
