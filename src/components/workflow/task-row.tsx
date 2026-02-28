@@ -1,0 +1,65 @@
+import type { WorkflowProjectionTask } from '@/lib/api-client'
+import { StateBadge } from '@/components/workflow/state-badge'
+
+type TaskRowProps = {
+  task: WorkflowProjectionTask
+  onSelect: () => void
+  onComplete: () => void
+  completing: boolean
+}
+
+export function TaskRow({ task, onSelect, onComplete, completing }: TaskRowProps) {
+  return (
+    <div
+      className="grid grid-cols-[minmax(0,1.8fr)_auto_auto_auto_auto_auto] items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 transition hover:border-zinc-300 hover:shadow-sm"
+      style={{ transitionDuration: '180ms' }}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        className="min-w-0 text-left"
+        title="Open details"
+      >
+        <div className="truncate text-sm font-semibold text-zinc-900">{task.name ?? task.id}</div>
+        <div className="truncate text-xs text-zinc-500">{task.id}</div>
+      </button>
+
+      <StateBadge state={task.state} />
+
+      <div className="text-xs text-zinc-600">↑ {task.upstreamTaskIds.length}</div>
+      <div className="text-xs text-zinc-600">↓ {task.downstreamTaskIds.length}</div>
+      <div
+        className="text-xs text-zinc-600"
+        title={
+          task.blockingTaskIds.length > 0
+            ? `blocked by ${task.blockingTaskIds.length} tasks`
+            : 'no blockers'
+        }
+      >
+        blockers {task.blockingTaskIds.length}
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        {task.requiresApproval ? (
+          <span className="rounded bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800">
+            APPROVAL
+          </span>
+        ) : null}
+        {task.requiresPrecondition ? (
+          <span className="rounded bg-zinc-200 px-2 py-1 text-[10px] font-semibold text-zinc-700">
+            PRECONDITION
+          </span>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onComplete}
+          disabled={!task.canComplete || completing}
+          className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-300"
+        >
+          {completing ? 'Completing…' : 'Complete'}
+        </button>
+      </div>
+    </div>
+  )
+}

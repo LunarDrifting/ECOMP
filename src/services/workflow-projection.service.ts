@@ -257,6 +257,7 @@ export async function getWorkflowProjection({
 
     return {
       id: task.id,
+      name: task.name,
       state: task.state,
       ownerRoleId: task.ownerRoleId,
       approvalPolicy: task.approvalPolicy,
