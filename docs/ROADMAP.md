@@ -53,3 +53,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Upgrade instantiation service to build Task hierarchy from TemplateTaskDefinition
 - Service-layer only, no schema/model changes
 - Deterministic parent-first creation with strict tenant isolation
+
+### Phase 2.3
+- Introduce TemplateDependencyDefinition schema for blueprint dependency graphs
+- Schema-only changes (no business logic)
+- Tenant-scoped dependency blueprint links between template task definitions
