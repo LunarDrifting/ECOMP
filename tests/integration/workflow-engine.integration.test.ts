@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 import { POST as instantiatePost } from '@/app/api/ecos/[id]/instantiate/route'
 import { POST as completePost } from '@/app/api/tasks/[id]/complete/route'
 import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
+import { GET as auditGet } from '@/app/api/ecos/[id]/audit/route'
 import * as dbModule from '@/lib/db'
 import {
   createBlueprintFixture,
@@ -72,6 +73,23 @@ async function getProjection(args: {
   )
 
   const response = await projectionGet(request, {
+    params: Promise.resolve({ id: args.ecoId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function getAudit(args: { tenantId: string; ecoId: string }) {
+  const query = new URLSearchParams({ tenantId: args.tenantId })
+  const request = new NextRequest(
+    `http://localhost/api/ecos/${args.ecoId}/audit?${query.toString()}`,
+    { method: 'GET' }
+  )
+
+  const response = await auditGet(request, {
     params: Promise.resolve({ id: args.ecoId }),
   } as RouteContext)
 
@@ -276,6 +294,42 @@ describe.sequential('workflow engine integration', () => {
     )
     const rejectedPayload = (rejectedEvent?.payload ?? {}) as AuditPayload
     expect(rejectedPayload.reasonCode).toBe('TASK_BLOCKED')
+  })
+
+  it('audit endpoint returns read-only event timeline without pii fields', async () => {
+    const actors = await createTenantActorsFixture()
+    const fixture = await createBlueprintFixture({
+      tenantId: actors.tenantId,
+      ownerRoleId: actors.ownerRoleId,
+      taskDefinitions: [
+        { key: 'a', name: 'Task A' },
+        { key: 'b', name: 'Task B' },
+      ],
+      dependencyDefinitions: [{ fromKey: 'a', toKey: 'b' }],
+    })
+
+    await postInstantiate(
+      {
+        tenantId: actors.tenantId,
+        templateVersionId: fixture.templateVersionId,
+        actorId: actors.ownerActorId,
+      },
+      fixture.ecoId
+    )
+
+    const auditResult = await getAudit({
+      tenantId: actors.tenantId,
+      ecoId: fixture.ecoId,
+    })
+
+    expect(auditResult.status).toBe(200)
+    expect(Array.isArray(auditResult.json.events)).toBe(true)
+    expect(auditResult.json.events.length).toBeGreaterThan(0)
+    expect(auditResult.json.events[0].eventType).toBeTruthy()
+
+    const payloadKeys = Object.keys(auditResult.json.events[0].payload ?? {})
+    expect(payloadKeys).not.toContain('email')
+    expect(payloadKeys).not.toContain('name')
   })
 
   it('completing a NOT_STARTED task succeeds and unblocks downstream when applicable', async () => {
