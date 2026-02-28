@@ -78,3 +78,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Add canonical DONE transition endpoint and service method for task completion
 - Service-layer only, no schema/model changes
 - DONE transition triggers runtime dependency resolution and returns unblock results
+
+### Phase 2.8
+- Enforce approval requirements in markTaskDone before DONE transitions
+- Service-layer only, no schema/model changes
+- Approval-aware completion checks with deterministic rejection semantics
