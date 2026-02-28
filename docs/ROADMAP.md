@@ -68,3 +68,8 @@ Implement service-layer workflow instantiation operations using existing schema 
 - Compute initial task blocking state from runtime dependency graph during first instantiation
 - Service-layer only, no schema/model changes
 - Deterministic initial state assignment for newly created tasks
+
+### Phase 2.6
+- Implement runtime dependency resolution to unblock downstream tasks after upstream completion
+- Service-layer only, no schema/model changes
+- Targeted downstream reevaluation with deterministic unblocking
