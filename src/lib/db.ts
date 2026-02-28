@@ -73,6 +73,17 @@ export function tenantDb(tenantId: string) {
         }),
     },
 
+    templateDependencyDefinition: {
+      listByTemplateVersion: (templateVersionId: string) =>
+        prisma.templateDependencyDefinition.findMany({
+          where: {
+            templateVersionId,
+            tenantId,
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        }),
+    },
+
     ecoPlan: {
       findByEcoId: (ecoId: string) =>
         prisma.eCOPlan.findFirst({
@@ -138,6 +149,51 @@ export function tenantDb(tenantId: string) {
             clockMode: args.clockMode,
           },
         }),
+    },
+
+    dependency: {
+      listByTaskIds: (taskIds: string[]) =>
+        prisma.dependency.findMany({
+          where: {
+            fromTaskId: { in: taskIds },
+            toTaskId: { in: taskIds },
+          },
+          select: {
+            id: true,
+            fromTaskId: true,
+            toTaskId: true,
+          },
+        }),
+
+      create: async (args: {
+        fromTaskId: string
+        toTaskId: string
+        type: 'FINISH_TO_START' | 'START_TO_START'
+        lagMinutes: number
+      }) => {
+        const scopedTasks = await prisma.task.findMany({
+          where: {
+            tenantId,
+            id: {
+              in: [args.fromTaskId, args.toTaskId],
+            },
+          },
+          select: { id: true },
+        })
+
+        if (scopedTasks.length !== 2) {
+          throw new Error('Dependency task scope validation failed for tenant')
+        }
+
+        return prisma.dependency.create({
+          data: {
+            fromTaskId: args.fromTaskId,
+            toTaskId: args.toTaskId,
+            type: args.type,
+            lagMinutes: args.lagMinutes,
+          },
+        })
+      },
     },
 
     userRole: prisma.userRole,
