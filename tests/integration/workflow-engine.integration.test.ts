@@ -728,4 +728,194 @@ describe.sequential('workflow engine integration', () => {
     expect(taskById.get(gateFailTask.id).canComplete).toBe(false)
     expect(taskById.get(rbacDeniedTask.id).canComplete).toBe(false)
   })
+
+  it('concurrent completion of same NOT_STARTED task yields exactly one done_marked result', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Concurrent Same Task ECO', tenantId: actors.tenantId },
+    })
+
+    const rootTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Concurrent Root',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const downstreamTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Concurrent Child',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.dependency.create({
+      data: {
+        fromTaskId: rootTask.id,
+        toTaskId: downstreamTask.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    const [first, second] = await Promise.all([
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        rootTask.id
+      ),
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        rootTask.id
+      ),
+    ])
+
+    const results = [first, second]
+    const okResults = results.filter((result) => result.status === 200)
+    expect(okResults.length).toBe(2)
+
+    const doneMarkedCount = okResults.filter(
+      (result) => result.json.taskMarkedDone === true
+    ).length
+    const noopCount = okResults.filter(
+      (result) =>
+        result.json.taskMarkedDone === false &&
+        result.json.status === 'noop_already_done'
+    ).length
+    expect(doneMarkedCount).toBe(1)
+    expect(noopCount).toBe(1)
+
+    const totalUnblocked = okResults.reduce(
+      (sum, result) => sum + (result.json.tasksUnblocked as number),
+      0
+    )
+    expect(totalUnblocked).toBe(1)
+
+    const finalStates = await testPrisma.task.findMany({
+      where: { id: { in: [rootTask.id, downstreamTask.id] } },
+      select: { id: true, state: true },
+    })
+    const stateById = new Map(finalStates.map((row) => [row.id, row.state]))
+    expect(stateById.get(rootTask.id)).toBe('DONE')
+    expect(stateById.get(downstreamTask.id)).toBe('NOT_STARTED')
+  })
+
+  it('concurrent completion of upstream prerequisites unblocks shared downstream exactly once', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Concurrent Prereq ECO', tenantId: actors.tenantId },
+    })
+
+    const upstreamA = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Prereq A',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const upstreamB = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Prereq B',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const downstream = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Shared Downstream',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    await testPrisma.dependency.createMany({
+      data: [
+        {
+          fromTaskId: upstreamA.id,
+          toTaskId: downstream.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          fromTaskId: upstreamB.id,
+          toTaskId: downstream.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+      ],
+    })
+
+    const [resultA, resultB] = await Promise.all([
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        upstreamA.id
+      ),
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        upstreamB.id
+      ),
+    ])
+
+    expect(resultA.status).toBe(200)
+    expect(resultB.status).toBe(200)
+    expect(resultA.json.taskMarkedDone).toBe(true)
+    expect(resultB.json.taskMarkedDone).toBe(true)
+
+    const totalUnblocked =
+      (resultA.json.tasksUnblocked as number) + (resultB.json.tasksUnblocked as number)
+    expect(totalUnblocked).toBe(1)
+
+    const finalStates = await testPrisma.task.findMany({
+      where: { id: { in: [upstreamA.id, upstreamB.id, downstream.id] } },
+      select: { id: true, state: true },
+    })
+    const stateById = new Map(finalStates.map((row) => [row.id, row.state]))
+
+    expect(stateById.get(upstreamA.id)).toBe('DONE')
+    expect(stateById.get(upstreamB.id)).toBe('DONE')
+    expect(stateById.get(downstream.id)).toBe('NOT_STARTED')
+  })
+
+  it('concurrent completion attempts for BLOCKED task reject deterministically', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Concurrent Blocked ECO', tenantId: actors.tenantId },
+    })
+
+    const blockedTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Blocked Concurrent',
+      state: 'BLOCKED',
+      approvalPolicy: 'NONE',
+    })
+
+    const [first, second] = await Promise.all([
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        blockedTask.id
+      ),
+      postComplete(
+        { tenantId: actors.tenantId, actorId: actors.ownerActorId },
+        blockedTask.id
+      ),
+    ])
+
+    expect(first.status).toBe(409)
+    expect(second.status).toBe(409)
+    expect(first.json.error).toContain('BLOCKED')
+    expect(second.json.error).toContain('BLOCKED')
+
+    const task = await testPrisma.task.findFirstOrThrow({
+      where: { id: blockedTask.id },
+      select: { state: true },
+    })
+    expect(task.state).toBe('BLOCKED')
+  })
 })
