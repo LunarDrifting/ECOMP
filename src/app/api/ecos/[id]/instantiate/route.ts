@@ -42,6 +42,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: message }, { status: 409 })
     }
 
+    if (
+      message.includes('Unresolvable TemplateTaskDefinition hierarchy') ||
+      message.includes('No TemplateTaskDefinition rows found')
+    ) {
+      return NextResponse.json({ error: message }, { status: 422 })
+    }
+
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
