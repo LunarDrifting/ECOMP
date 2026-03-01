@@ -7,6 +7,10 @@ import { GET as ecosGet, POST as ecosPost } from '@/app/api/ecos/route'
 import { GET as templateVersionsGet } from '@/app/api/template-versions/route'
 import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
 import { GET as auditGet } from '@/app/api/ecos/[id]/audit/route'
+import { POST as validateTemplateVersionPost } from '@/app/api/template-versions/[id]/validate/route'
+import { POST as publishTemplateVersionPost } from '@/app/api/template-versions/[id]/publish/route'
+import { GET as templateTasksGet } from '@/app/api/template-versions/[id]/tasks/route'
+import { GET as templateDependenciesGet } from '@/app/api/template-versions/[id]/dependencies/route'
 import * as dbModule from '@/lib/db'
 import {
   createBlueprintFixture,
@@ -160,6 +164,80 @@ async function getAudit(args: { tenantId: string; ecoId: string }) {
   }
 }
 
+async function postValidateTemplateVersion(body: Record<string, unknown>, templateVersionId: string) {
+  const request = new NextRequest(
+    `http://localhost/api/template-versions/${templateVersionId}/validate`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  )
+
+  const response = await validateTemplateVersionPost(request, {
+    params: Promise.resolve({ id: templateVersionId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function postPublishTemplateVersion(body: Record<string, unknown>, templateVersionId: string) {
+  const request = new NextRequest(
+    `http://localhost/api/template-versions/${templateVersionId}/publish`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  )
+
+  const response = await publishTemplateVersionPost(request, {
+    params: Promise.resolve({ id: templateVersionId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function getTemplateTasks(args: { tenantId: string; templateVersionId: string }) {
+  const query = new URLSearchParams({ tenantId: args.tenantId })
+  const request = new NextRequest(
+    `http://localhost/api/template-versions/${args.templateVersionId}/tasks?${query.toString()}`,
+    { method: 'GET' }
+  )
+
+  const response = await templateTasksGet(request, {
+    params: Promise.resolve({ id: args.templateVersionId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function getTemplateDependencies(args: { tenantId: string; templateVersionId: string }) {
+  const query = new URLSearchParams({ tenantId: args.tenantId })
+  const request = new NextRequest(
+    `http://localhost/api/template-versions/${args.templateVersionId}/dependencies?${query.toString()}`,
+    { method: 'GET' }
+  )
+
+  const response = await templateDependenciesGet(request, {
+    params: Promise.resolve({ id: args.templateVersionId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
 async function listAuditEventsForEco(ecoId: string) {
   return testPrisma.auditEvent.findMany({
     where: { ecoId },
@@ -255,6 +333,307 @@ describe.sequential('workflow engine integration', () => {
         (row: { templateName: string }) => row.templateName === 'Tenant A Template'
       )
     ).toBe(true)
+  })
+
+  it('template validate rejects cyclic blueprint graph', async () => {
+    const actors = await createTenantActorsFixture()
+    const template = await testPrisma.template.create({
+      data: {
+        tenantId: actors.tenantId,
+        name: 'Validate Cycle Template',
+      },
+    })
+    const templateVersion = await testPrisma.templateVersion.create({
+      data: {
+        templateId: template.id,
+        version: 'draft-cycle',
+        isPublished: false,
+      },
+    })
+    const definitionA = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        name: 'A',
+        taskLevel: 'STEP',
+        ownerRoleId: actors.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    const definitionB = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        name: 'B',
+        taskLevel: 'STEP',
+        ownerRoleId: actors.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    await testPrisma.templateDependencyDefinition.createMany({
+      data: [
+        {
+          templateVersionId: templateVersion.id,
+          tenantId: actors.tenantId,
+          fromDefinitionId: definitionA.id,
+          toDefinitionId: definitionB.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+        {
+          templateVersionId: templateVersion.id,
+          tenantId: actors.tenantId,
+          fromDefinitionId: definitionB.id,
+          toDefinitionId: definitionA.id,
+          type: 'FINISH_TO_START',
+          lagMinutes: 0,
+        },
+      ],
+    })
+
+    const result = await postValidateTemplateVersion(
+      { tenantId: actors.tenantId },
+      templateVersion.id
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.json.ok).toBe(false)
+    expect(result.json.errors.some((error: { code: string }) => error.code === 'CYCLE')).toBe(
+      true
+    )
+  })
+
+  it('template publish is blocked when validation fails', async () => {
+    const actors = await createTenantActorsFixture()
+    const template = await testPrisma.template.create({
+      data: {
+        tenantId: actors.tenantId,
+        name: 'Publish Blocked Template',
+      },
+    })
+    const templateVersion = await testPrisma.templateVersion.create({
+      data: {
+        templateId: template.id,
+        version: 'draft-invalid',
+        isPublished: false,
+      },
+    })
+    const definitionA = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        name: 'A',
+        taskLevel: 'STEP',
+        ownerRoleId: actors.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    await testPrisma.templateDependencyDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        fromDefinitionId: definitionA.id,
+        toDefinitionId: definitionA.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    const publishResult = await postPublishTemplateVersion(
+      { tenantId: actors.tenantId },
+      templateVersion.id
+    )
+    expect(publishResult.status).toBe(409)
+    expect(publishResult.json.error).toBe('Template validation failed')
+
+    const persisted = await testPrisma.templateVersion.findUniqueOrThrow({
+      where: { id: templateVersion.id },
+      select: { isPublished: true },
+    })
+    expect(persisted.isPublished).toBe(false)
+  })
+
+  it('template publish succeeds when validation passes and is idempotent on repeat', async () => {
+    const actors = await createTenantActorsFixture()
+    const template = await testPrisma.template.create({
+      data: {
+        tenantId: actors.tenantId,
+        name: 'Publish Success Template',
+      },
+    })
+    const templateVersion = await testPrisma.templateVersion.create({
+      data: {
+        templateId: template.id,
+        version: 'draft-valid',
+        isPublished: false,
+      },
+    })
+    const definitionA = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        name: 'A',
+        taskLevel: 'STEP',
+        ownerRoleId: actors.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    const definitionB = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        name: 'B',
+        taskLevel: 'STEP',
+        ownerRoleId: actors.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    await testPrisma.templateDependencyDefinition.create({
+      data: {
+        templateVersionId: templateVersion.id,
+        tenantId: actors.tenantId,
+        fromDefinitionId: definitionA.id,
+        toDefinitionId: definitionB.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    const publishFirst = await postPublishTemplateVersion(
+      { tenantId: actors.tenantId },
+      templateVersion.id
+    )
+    expect(publishFirst.status).toBe(200)
+    expect(publishFirst.json.status).toBe('published')
+
+    const publishSecond = await postPublishTemplateVersion(
+      { tenantId: actors.tenantId },
+      templateVersion.id
+    )
+    expect(publishSecond.status).toBe(200)
+    expect(publishSecond.json.status).toBe('noop_already_published')
+
+    const persisted = await testPrisma.templateVersion.findUniqueOrThrow({
+      where: { id: templateVersion.id },
+      select: { isPublished: true },
+    })
+    expect(persisted.isPublished).toBe(true)
+  })
+
+  it('template tasks/dependencies list endpoints enforce tenant scoping', async () => {
+    const tenantA = await createTenantActorsFixture()
+    const tenantB = await createTenantActorsFixture()
+
+    const templateA = await testPrisma.template.create({
+      data: {
+        tenantId: tenantA.tenantId,
+        name: 'Tenant A Builder Template',
+      },
+    })
+    const templateB = await testPrisma.template.create({
+      data: {
+        tenantId: tenantB.tenantId,
+        name: 'Tenant B Builder Template',
+      },
+    })
+    const versionA = await testPrisma.templateVersion.create({
+      data: {
+        templateId: templateA.id,
+        version: 'draft-a',
+        isPublished: false,
+      },
+    })
+    const versionB = await testPrisma.templateVersion.create({
+      data: {
+        templateId: templateB.id,
+        version: 'draft-b',
+        isPublished: false,
+      },
+    })
+
+    const aDef1 = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: versionA.id,
+        tenantId: tenantA.tenantId,
+        name: 'A1',
+        taskLevel: 'STEP',
+        ownerRoleId: tenantA.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    const aDef2 = await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: versionA.id,
+        tenantId: tenantA.tenantId,
+        name: 'A2',
+        taskLevel: 'STEP',
+        ownerRoleId: tenantA.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+    await testPrisma.templateDependencyDefinition.create({
+      data: {
+        templateVersionId: versionA.id,
+        tenantId: tenantA.tenantId,
+        fromDefinitionId: aDef1.id,
+        toDefinitionId: aDef2.id,
+        type: 'FINISH_TO_START',
+        lagMinutes: 0,
+      },
+    })
+
+    await testPrisma.templateTaskDefinition.create({
+      data: {
+        templateVersionId: versionB.id,
+        tenantId: tenantB.tenantId,
+        name: 'B1',
+        taskLevel: 'STEP',
+        ownerRoleId: tenantB.ownerRoleId,
+        visibility: 'INTERNAL_ONLY',
+        approvalPolicy: 'NONE',
+        clockMode: 'ACTIVE',
+      },
+    })
+
+    const ownTasks = await getTemplateTasks({
+      tenantId: tenantA.tenantId,
+      templateVersionId: versionA.id,
+    })
+    expect(ownTasks.status).toBe(200)
+    expect(ownTasks.json.tasks.length).toBe(2)
+
+    const ownDependencies = await getTemplateDependencies({
+      tenantId: tenantA.tenantId,
+      templateVersionId: versionA.id,
+    })
+    expect(ownDependencies.status).toBe(200)
+    expect(ownDependencies.json.dependencies.length).toBe(1)
+
+    const crossTenantTasks = await getTemplateTasks({
+      tenantId: tenantA.tenantId,
+      templateVersionId: versionB.id,
+    })
+    expect(crossTenantTasks.status).toBe(404)
+
+    const crossTenantDependencies = await getTemplateDependencies({
+      tenantId: tenantA.tenantId,
+      templateVersionId: versionB.id,
+    })
+    expect(crossTenantDependencies.status).toBe(404)
   })
 
   it('instantiation creates tasks/dependencies and blocked+ready equals tasksCreated', async () => {
