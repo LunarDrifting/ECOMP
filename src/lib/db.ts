@@ -4,6 +4,16 @@ import { prisma } from '@/lib/prisma'
 type TenantDbClient = Prisma.TransactionClient | typeof prisma
 type JsonPrimitive = string | number | boolean | null
 type JsonLike = JsonPrimitive | JsonLike[] | { [key: string]: JsonLike }
+type TenantScopedUserCreateArgs = {
+  data: Omit<Prisma.UserUncheckedCreateInput, 'tenantId'>
+  select?: Prisma.UserSelect | null
+  include?: Prisma.UserInclude | null
+}
+type TenantScopedRoleCreateArgs = {
+  data: Omit<Prisma.RoleUncheckedCreateInput, 'tenantId'>
+  select?: Prisma.RoleSelect | null
+  include?: Prisma.RoleInclude | null
+}
 
 function sanitizeAuditPayload(input: Record<string, unknown>): Record<string, JsonLike> {
   const toJsonLike = (value: unknown): JsonLike => {
@@ -56,7 +66,7 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
 
   return {
     tenant: {
-      findUnique: (args: any) =>
+      findUnique: (args: Prisma.TenantFindUniqueArgs) =>
         client.tenant.findUnique({
           ...args,
           where: { ...args.where, id: tenantId },
@@ -64,30 +74,36 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
     },
 
     user: {
-      findMany: (args: any = {}) =>
+      findMany: (args: Prisma.UserFindManyArgs = {}) =>
         client.user.findMany({
           ...args,
-          where: { ...args.where, tenantId },
+          where: { ...(args.where ?? {}), tenantId },
         }),
 
-      create: (args: any) =>
+      create: (args: TenantScopedUserCreateArgs) =>
         client.user.create({
           ...args,
-          data: { ...args.data, tenantId },
+          data: {
+            ...args.data,
+            tenantId,
+          },
         }),
     },
 
     role: {
-      findMany: (args: any = {}) =>
+      findMany: (args: Prisma.RoleFindManyArgs = {}) =>
         client.role.findMany({
           ...args,
-          where: { ...args.where, tenantId },
+          where: { ...(args.where ?? {}), tenantId },
         }),
 
-      create: (args: any) =>
+      create: (args: TenantScopedRoleCreateArgs) =>
         client.role.create({
           ...args,
-          data: { ...args.data, tenantId },
+          data: {
+            ...args.data,
+            tenantId,
+          },
         }),
     },
 
@@ -135,6 +151,45 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
         }),
     },
 
+    template: {
+      listByTenant: () =>
+        client.template.findMany({
+          where: { tenantId },
+          select: {
+            id: true,
+            name: true,
+            createdAt: true,
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+
+      findById: (templateId: string) =>
+        client.template.findFirst({
+          where: {
+            id: templateId,
+            tenantId,
+          },
+          select: {
+            id: true,
+            name: true,
+            createdAt: true,
+          },
+        }),
+
+      create: (name: string) =>
+        client.template.create({
+          data: {
+            tenantId,
+            name,
+          },
+          select: {
+            id: true,
+            name: true,
+            createdAt: true,
+          },
+        }),
+    },
+
     templateVersion: {
       findByIdViaTemplate: (templateVersionId: string) =>
         client.templateVersion.findFirst({
@@ -167,6 +222,55 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         }),
+
+      listByTemplateId: (templateId: string) =>
+        client.templateVersion.findMany({
+          where: {
+            templateId,
+            template: { tenantId },
+          },
+          select: {
+            id: true,
+            templateId: true,
+            version: true,
+            isPublished: true,
+            createdAt: true,
+            template: {
+              select: {
+                name: true,
+              },
+            },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+
+      createDraft: (templateId: string, version: string) =>
+        client.templateVersion.create({
+          data: {
+            templateId,
+            version,
+            isPublished: false,
+          },
+          select: {
+            id: true,
+            templateId: true,
+            version: true,
+            isPublished: true,
+            createdAt: true,
+          },
+        }),
+
+      publishIfDraft: (templateVersionId: string) =>
+        client.templateVersion.updateMany({
+          where: {
+            id: templateVersionId,
+            isPublished: false,
+            template: { tenantId },
+          },
+          data: {
+            isPublished: true,
+          },
+        }),
     },
 
     templateTaskDefinition: {
@@ -178,6 +282,78 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         }),
+
+      findById: (taskDefinitionId: string) =>
+        client.templateTaskDefinition.findFirst({
+          where: {
+            id: taskDefinitionId,
+            tenantId,
+          },
+        }),
+
+      createForTemplateVersion: (args: {
+        templateVersionId: string
+        parentDefinitionId?: string | null
+        name: string
+        taskLevel: 'MILESTONE' | 'STEP' | 'SUBSTEP'
+        ownerRoleId: string
+        visibility:
+          | 'INTERNAL_ONLY'
+          | 'CUSTOMER_VISIBLE'
+          | 'CUSTOMER_ACTIONABLE'
+        approvalPolicy: 'NONE' | 'SINGLE' | 'SEQUENTIAL' | 'PARALLEL' | 'QUORUM'
+        clockMode:
+          | 'ACTIVE'
+          | 'WAITING_ON_CUSTOMER'
+          | 'WAITING_ON_SUPPLIER'
+          | 'WAITING_INTERNAL'
+      }) =>
+        client.templateTaskDefinition.create({
+          data: {
+            templateVersionId: args.templateVersionId,
+            tenantId,
+            parentDefinitionId: args.parentDefinitionId ?? null,
+            name: args.name,
+            taskLevel: args.taskLevel,
+            ownerRoleId: args.ownerRoleId,
+            visibility: args.visibility,
+            approvalPolicy: args.approvalPolicy,
+            clockMode: args.clockMode,
+          },
+        }),
+
+      updateById: (args: {
+        taskDefinitionId: string
+        data: {
+          parentDefinitionId?: string | null
+          name?: string
+          taskLevel?: 'MILESTONE' | 'STEP' | 'SUBSTEP'
+          ownerRoleId?: string
+          visibility?:
+            | 'INTERNAL_ONLY'
+            | 'CUSTOMER_VISIBLE'
+            | 'CUSTOMER_ACTIONABLE'
+          approvalPolicy?: 'NONE' | 'SINGLE' | 'SEQUENTIAL' | 'PARALLEL' | 'QUORUM'
+          clockMode?:
+            | 'ACTIVE'
+            | 'WAITING_ON_CUSTOMER'
+            | 'WAITING_ON_SUPPLIER'
+            | 'WAITING_INTERNAL'
+        }
+      }) =>
+        client.templateTaskDefinition.update({
+          where: {
+            id: args.taskDefinitionId,
+          },
+          data: args.data,
+        }),
+
+      deleteById: (taskDefinitionId: string) =>
+        client.templateTaskDefinition.delete({
+          where: {
+            id: taskDefinitionId,
+          },
+        }),
     },
 
     templateDependencyDefinition: {
@@ -188,6 +364,39 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
             tenantId,
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        }),
+
+      findById: (dependencyDefinitionId: string) =>
+        client.templateDependencyDefinition.findFirst({
+          where: {
+            id: dependencyDefinitionId,
+            tenantId,
+          },
+        }),
+
+      createForTemplateVersion: (args: {
+        templateVersionId: string
+        fromDefinitionId: string
+        toDefinitionId: string
+        type: 'FINISH_TO_START' | 'START_TO_START'
+        lagMinutes: number
+      }) =>
+        client.templateDependencyDefinition.create({
+          data: {
+            templateVersionId: args.templateVersionId,
+            tenantId,
+            fromDefinitionId: args.fromDefinitionId,
+            toDefinitionId: args.toDefinitionId,
+            type: args.type,
+            lagMinutes: args.lagMinutes,
+          },
+        }),
+
+      deleteById: (dependencyDefinitionId: string) =>
+        client.templateDependencyDefinition.delete({
+          where: {
+            id: dependencyDefinitionId,
+          },
         }),
     },
 
@@ -267,10 +476,14 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
         ecoId: string
         ownerRoleId: string
         name: string
-        taskLevel: any
-        visibility: any
-        approvalPolicy: any
-        clockMode: any
+        taskLevel: 'MILESTONE' | 'STEP' | 'SUBSTEP'
+        visibility: 'INTERNAL_ONLY' | 'CUSTOMER_VISIBLE' | 'CUSTOMER_ACTIONABLE'
+        approvalPolicy: 'NONE' | 'SINGLE' | 'SEQUENTIAL' | 'PARALLEL' | 'QUORUM'
+        clockMode:
+          | 'ACTIVE'
+          | 'WAITING_ON_CUSTOMER'
+          | 'WAITING_ON_SUPPLIER'
+          | 'WAITING_INTERNAL'
         parentTaskId?: string
       }) =>
         client.task.create({
