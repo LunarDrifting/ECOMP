@@ -58,6 +58,21 @@ export type TenantUserOption = {
   email: string
 }
 
+export type EcoOption = {
+  id: string
+  title: string
+  createdAt: string
+}
+
+export type TemplateVersionOption = {
+  id: string
+  templateId: string
+  templateName: string
+  version: string
+  isPublished: boolean
+  createdAt: string
+}
+
 type CompleteTaskResponse = {
   taskMarkedDone: boolean
   tasksUnblocked: number
@@ -70,6 +85,16 @@ type CreateApprovalResponse = {
   taskId: string
   actorId: string
   decision: string
+  status: string
+}
+
+type CreateEcoResponse = {
+  tenantId: string
+  ecoId: string
+}
+
+type InstantiateEcoResponse = {
+  ecoId: string
   status: string
 }
 
@@ -124,6 +149,44 @@ export async function fetchAuditTimeline(args: {
 
 export async function fetchTenantUsers(tenantId: string) {
   return requestJson<TenantUserOption[]>(`/api/tenants/${tenantId}/users`)
+}
+
+export async function fetchEcos(tenantId: string) {
+  return requestJson<{ tenantId: string; ecos: EcoOption[] }>(
+    `/api/ecos?${new URLSearchParams({ tenantId }).toString()}`
+  )
+}
+
+export async function createEco(args: { tenantId: string; title: string }) {
+  return requestJson<CreateEcoResponse>('/api/ecos', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId: args.tenantId,
+      title: args.title,
+    }),
+  })
+}
+
+export async function fetchTemplateVersions(tenantId: string) {
+  return requestJson<{ tenantId: string; templateVersions: TemplateVersionOption[] }>(
+    `/api/template-versions?${new URLSearchParams({ tenantId }).toString()}`
+  )
+}
+
+export async function instantiateEco(args: {
+  tenantId: string
+  ecoId: string
+  templateVersionId: string
+  actorId?: string
+}) {
+  return requestJson<InstantiateEcoResponse>(`/api/ecos/${args.ecoId}/instantiate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId: args.tenantId,
+      templateVersionId: args.templateVersionId,
+      ...(args.actorId ? { actorId: args.actorId } : {}),
+    }),
+  })
 }
 
 export async function completeTask(args: {

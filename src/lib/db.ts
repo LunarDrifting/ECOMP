@@ -97,6 +97,30 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           where: { id: ecoId, tenantId },
         }),
 
+      listByTenant: () =>
+        client.eCO.findMany({
+          where: { tenantId },
+          select: {
+            id: true,
+            title: true,
+            createdAt: true,
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+
+      create: (title: string) =>
+        client.eCO.create({
+          data: {
+            tenantId,
+            title,
+          },
+          select: {
+            id: true,
+            title: true,
+            createdAt: true,
+          },
+        }),
+
       findByTaskId: (taskId: string) =>
         client.eCO.findFirst({
           where: {
@@ -121,6 +145,27 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           include: {
             template: true,
           },
+        }),
+
+      listPublishedByTenant: () =>
+        client.templateVersion.findMany({
+          where: {
+            isPublished: true,
+            template: { tenantId },
+          },
+          select: {
+            id: true,
+            templateId: true,
+            version: true,
+            isPublished: true,
+            createdAt: true,
+            template: {
+              select: {
+                name: true,
+              },
+            },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         }),
     },
 

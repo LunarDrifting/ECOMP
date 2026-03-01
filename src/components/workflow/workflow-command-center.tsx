@@ -5,8 +5,10 @@ import {
   completeTask,
   createApproval,
   fetchAuditTimeline,
+  fetchEcos,
   fetchProjection,
   fetchTenantUsers,
+  type EcoOption,
   type WorkflowProjectionTask,
   type AuditTimelineResponse,
   type TenantUserOption,
@@ -47,6 +49,7 @@ export function WorkflowCommandCenter({
   const [filter, setFilter] = useState<WorkflowFilter>('ALL')
   const [search, setSearch] = useState('')
   const [tenantUsers, setTenantUsers] = useState<TenantUserOption[]>([])
+  const [ecos, setEcos] = useState<EcoOption[]>([])
   const [newlyReadyTaskIds, setNewlyReadyTaskIds] = useState<string[]>([])
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([])
   const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -200,6 +203,9 @@ export function WorkflowCommandCenter({
       if (!result.ok) {
         setTenantUsers([])
         setMessage(`Tenant users load failed (${result.status}): ${result.error}`)
+        if (ecoId) {
+          void refreshData({ actorIdOverride: undefined })
+        }
         return
       }
 
@@ -212,8 +218,10 @@ export function WorkflowCommandCenter({
         setActorId(nextActorId)
       }
 
-      if (ecoId && nextActorId) {
-        void refreshData({ actorIdOverride: nextActorId })
+      if (ecoId) {
+        void refreshData({
+          actorIdOverride: nextActorId || undefined,
+        })
       }
     }
 
@@ -223,6 +231,34 @@ export function WorkflowCommandCenter({
       cancelled = true
     }
   }, [tenantId, ecoId, actorId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadEcos() {
+      if (!tenantId) {
+        setEcos([])
+        return
+      }
+
+      const result = await fetchEcos(tenantId)
+      if (cancelled) {
+        return
+      }
+
+      if (!result.ok) {
+        setEcos([])
+        return
+      }
+
+      setEcos(result.data.ecos)
+    }
+
+    void loadEcos()
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId])
 
   async function handleComplete(taskId: string) {
     if (!tenantId || !actorId) {
@@ -327,12 +363,28 @@ export function WorkflowCommandCenter({
               placeholder="tenantId"
               className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
             />
-            <input
-              value={ecoId}
-              onChange={(event) => setEcoId(event.target.value)}
-              placeholder="ecoId"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
-            />
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <input
+                value={ecoId}
+                onChange={(event) => setEcoId(event.target.value)}
+                placeholder="ecoId"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
+              />
+              <select
+                value={ecoId}
+                onChange={(event) => {
+                  setEcoId(event.target.value)
+                }}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-slate-900"
+              >
+                <option value="">ECO list</option>
+                {ecos.map((eco) => (
+                  <option key={eco.id} value={eco.id}>
+                    {eco.title}
+                  </option>
+                ))}
+              </select>
+            </div>
             <select
               value={actorId}
               onChange={(event) => {

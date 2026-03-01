@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server'
 import { POST as instantiatePost } from '@/app/api/ecos/[id]/instantiate/route'
 import { POST as completePost } from '@/app/api/tasks/[id]/complete/route'
 import { POST as approvalPost } from '@/app/api/tasks/[id]/approvals/route'
+import { GET as ecosGet, POST as ecosPost } from '@/app/api/ecos/route'
+import { GET as templateVersionsGet } from '@/app/api/template-versions/route'
 import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
 import { GET as auditGet } from '@/app/api/ecos/[id]/audit/route'
 import * as dbModule from '@/lib/db'
@@ -75,6 +77,47 @@ async function postApproval(body: Record<string, unknown>, taskId: string) {
   }
 }
 
+async function getEcos(tenantId: string) {
+  const query = new URLSearchParams({ tenantId })
+  const request = new NextRequest(`http://localhost/api/ecos?${query.toString()}`, {
+    method: 'GET',
+  })
+
+  const response = await ecosGet(request)
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function postEcos(body: Record<string, unknown>) {
+  const request = new NextRequest('http://localhost/api/ecos', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  const response = await ecosPost(request)
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function getTemplateVersions(tenantId: string) {
+  const query = new URLSearchParams({ tenantId })
+  const request = new NextRequest(
+    `http://localhost/api/template-versions?${query.toString()}`,
+    { method: 'GET' }
+  )
+
+  const response = await templateVersionsGet(request)
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
 async function getProjection(args: {
   tenantId: string
   ecoId: string
@@ -129,6 +172,91 @@ async function listAuditEventsForEco(ecoId: string) {
 }
 
 describe.sequential('workflow engine integration', () => {
+  it('POST /api/ecos creates tenant-scoped ECO and returns ecoId', async () => {
+    const actors = await createTenantActorsFixture()
+
+    const result = await postEcos({
+      tenantId: actors.tenantId,
+      title: 'Intake-created ECO',
+    })
+
+    expect(result.status).toBe(200)
+    expect(typeof result.json.ecoId).toBe('string')
+    expect(result.json.ecoId.length).toBeGreaterThan(0)
+
+    const persisted = await testPrisma.eCO.findFirst({
+      where: {
+        id: result.json.ecoId,
+        tenantId: actors.tenantId,
+      },
+      select: {
+        id: true,
+        title: true,
+      },
+    })
+
+    expect(persisted?.id).toBe(result.json.ecoId)
+    expect(persisted?.title).toBe('Intake-created ECO')
+
+    const listResult = await getEcos(actors.tenantId)
+    expect(listResult.status).toBe(200)
+    expect(
+      listResult.json.ecos.some((row: { id: string }) => row.id === result.json.ecoId)
+    ).toBe(true)
+  })
+
+  it('GET /api/template-versions returns published versions for tenant only', async () => {
+    const tenantA = await createTenantActorsFixture()
+    const tenantB = await createTenantActorsFixture()
+
+    const templateA = await testPrisma.template.create({
+      data: {
+        tenantId: tenantA.tenantId,
+        name: 'Tenant A Template',
+      },
+    })
+    const templateB = await testPrisma.template.create({
+      data: {
+        tenantId: tenantB.tenantId,
+        name: 'Tenant B Template',
+      },
+    })
+
+    const publishedA = await testPrisma.templateVersion.create({
+      data: {
+        templateId: templateA.id,
+        version: 'v1',
+        isPublished: true,
+      },
+    })
+    await testPrisma.templateVersion.create({
+      data: {
+        templateId: templateA.id,
+        version: 'draft-a',
+        isPublished: false,
+      },
+    })
+    await testPrisma.templateVersion.create({
+      data: {
+        templateId: templateB.id,
+        version: 'v1',
+        isPublished: true,
+      },
+    })
+
+    const result = await getTemplateVersions(tenantA.tenantId)
+    expect(result.status).toBe(200)
+
+    const returnedIds = result.json.templateVersions.map((row: { id: string }) => row.id)
+    expect(returnedIds).toContain(publishedA.id)
+    expect(result.json.templateVersions.every((row: { isPublished: boolean }) => row.isPublished)).toBe(true)
+    expect(
+      result.json.templateVersions.every(
+        (row: { templateName: string }) => row.templateName === 'Tenant A Template'
+      )
+    ).toBe(true)
+  })
+
   it('instantiation creates tasks/dependencies and blocked+ready equals tasksCreated', async () => {
     const actors = await createTenantActorsFixture()
     const fixture = await createBlueprintFixture({
