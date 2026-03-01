@@ -6,6 +6,7 @@ type TaskRowProps = {
   onSelect: () => void
   onComplete: () => void
   completing: boolean
+  completeDisabledReason?: string
   newlyReady?: boolean
   recentlyCompleted?: boolean
 }
@@ -15,6 +16,7 @@ export function TaskRow({
   onSelect,
   onComplete,
   completing,
+  completeDisabledReason,
   newlyReady = false,
   recentlyCompleted = false,
 }: TaskRowProps) {
@@ -68,6 +70,7 @@ export function TaskRow({
           type="button"
           onClick={onComplete}
           disabled={task.canComplete !== true || completing}
+          title={task.canComplete !== true ? completeDisabledReason : 'Mark task done'}
           className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {completing ? 'Completing…' : 'Complete'}

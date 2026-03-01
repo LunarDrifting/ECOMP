@@ -145,6 +145,7 @@ export async function createApproval(args: {
   taskId: string
   actorId: string
   decision: 'APPROVED' | 'REJECTED'
+  comment?: string
 }) {
   return requestJson<CreateApprovalResponse>(`/api/tasks/${args.taskId}/approvals`, {
     method: 'POST',
@@ -152,6 +153,7 @@ export async function createApproval(args: {
       tenantId: args.tenantId,
       actorId: args.actorId,
       decision: args.decision,
+      ...(args.comment ? { comment: args.comment } : {}),
     }),
   })
 }

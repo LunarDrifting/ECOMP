@@ -19,6 +19,7 @@ type GraphViewProps = {
   completingTaskId: string | null
   newlyReadyTaskIds: string[]
   completedTaskIds: string[]
+  getIneligibleReason: (task: WorkflowProjectionTask) => string
 }
 
 type PositionedNode = {
@@ -47,6 +48,7 @@ export function GraphView({
   completingTaskId,
   newlyReadyTaskIds,
   completedTaskIds,
+  getIneligibleReason,
 }: GraphViewProps) {
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
   const [scale, setScale] = useState(1)
@@ -330,6 +332,9 @@ export function GraphView({
                     isNewlyReady={isNewlyReady}
                     isCompleted={isCompleted}
                     isCompleting={isCompleting}
+                    completeDisabledReason={
+                      task.canComplete === false ? getIneligibleReason(task) : undefined
+                    }
                     onHoverStart={() => setHoveredTaskId(task.id)}
                     onHoverEnd={() => setHoveredTaskId(null)}
                     onSelect={() => onSelectTask(task.id)}

@@ -3,14 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   completeTask,
+  createApproval,
   fetchAuditTimeline,
   fetchProjection,
   fetchTenantUsers,
+  type WorkflowProjectionTask,
   type AuditTimelineResponse,
   type TenantUserOption,
   type WorkflowProjectionResponse,
 } from '@/lib/api-client'
 import { CountBadge } from '@/components/workflow/count-badge'
+import { Filters, type WorkflowFilter } from '@/components/workflow/filters'
 import { TaskRow } from '@/components/workflow/task-row'
 import { TaskDrawer } from '@/components/workflow/task-drawer'
 import { AuditTimeline } from '@/components/workflow/audit-timeline'
@@ -35,8 +38,14 @@ export function WorkflowCommandCenter({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+  const [approvingTaskId, setApprovingTaskId] = useState<string | null>(null)
+  const [approvingDecision, setApprovingDecision] = useState<'APPROVED' | 'REJECTED' | null>(
+    null
+  )
   const [message, setMessage] = useState<string>('')
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list')
+  const [filter, setFilter] = useState<WorkflowFilter>('ALL')
+  const [search, setSearch] = useState('')
   const [tenantUsers, setTenantUsers] = useState<TenantUserOption[]>([])
   const [newlyReadyTaskIds, setNewlyReadyTaskIds] = useState<string[]>([])
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([])
@@ -60,6 +69,47 @@ export function WorkflowCommandCenter({
       .map((taskId) => taskById.get(taskId))
       .filter((task): task is NonNullable<typeof task> => !!task)
   }, [projection])
+
+  function getIneligibleReason(task: WorkflowProjectionTask): string {
+    if (task.state === 'DONE') {
+      return 'Already done'
+    }
+    if (task.state === 'BLOCKED' || task.blockingTaskIds.length > 0) {
+      return `Blocked by ${task.blockingTaskIds.length} tasks`
+    }
+    if (task.requiresApproval) {
+      return 'Approval required'
+    }
+    if (task.requiresPrecondition) {
+      return 'Precondition gate required'
+    }
+    return 'Not eligible'
+  }
+
+  const filteredTasks = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase()
+
+    return tasksInOrder.filter((task) => {
+      const filterMatch =
+        filter === 'ALL' ||
+        (filter === 'READY' && task.isReady) ||
+        (filter === 'BLOCKED' && task.state === 'BLOCKED') ||
+        (filter === 'DONE' && task.state === 'DONE')
+
+      if (!filterMatch) {
+        return false
+      }
+
+      if (normalizedSearch.length === 0) {
+        return true
+      }
+
+      return (
+        task.id.toLowerCase().includes(normalizedSearch) ||
+        task.name.toLowerCase().includes(normalizedSearch)
+      )
+    })
+  }, [filter, search, tasksInOrder])
 
   const selectedTask = useMemo(
     () => projection?.tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -200,6 +250,55 @@ export function WorkflowCommandCenter({
     }
   }
 
+  async function handleApprove(
+    taskId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    comment?: string
+  ) {
+    if (!tenantId || !actorId) {
+      setMessage('tenantId and actorId are required for approval actions')
+      return
+    }
+
+    setApprovingTaskId(taskId)
+    setApprovingDecision(decision)
+    setMessage('')
+    try {
+      const result = await createApproval({
+        tenantId,
+        actorId,
+        taskId,
+        decision,
+        comment,
+      })
+      if (!result.ok) {
+        setMessage(`Approval failed (${result.status}): ${result.error}`)
+      } else {
+        setMessage(`Approval recorded: ${result.data.status}`)
+      }
+
+      await refreshData({ previousProjection: projection })
+    } finally {
+      setApprovingTaskId(null)
+      setApprovingDecision(null)
+    }
+  }
+
+  async function handleCopyBlockers(ids: string[]) {
+    if (ids.length === 0) {
+      setMessage('No blocker IDs to copy')
+      return
+    }
+
+    const content = ids.join('\n')
+    try {
+      await navigator.clipboard.writeText(content)
+      setMessage(`Copied ${ids.length} blocker IDs`)
+    } catch {
+      setMessage('Clipboard unavailable')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 px-6 py-6 text-slate-900">
       <div className="mx-auto max-w-7xl space-y-4">
@@ -315,14 +414,25 @@ export function WorkflowCommandCenter({
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <section className="space-y-2">
+            <Filters
+              filter={filter}
+              onFilterChange={setFilter}
+              search={search}
+              onSearchChange={setSearch}
+            />
             {viewMode === 'list'
-              ? tasksInOrder.map((task) => (
+              ? filteredTasks.map((task) => (
                   <TaskRow
                     key={task.id}
                     task={task}
                     onSelect={() => setSelectedTaskId(task.id)}
                     onComplete={() => handleComplete(task.id)}
                     completing={completingTaskId === task.id}
+                    completeDisabledReason={
+                      actorId && task.canComplete === false
+                        ? getIneligibleReason(task)
+                        : undefined
+                    }
                     newlyReady={newlyReadyTaskIds.includes(task.id)}
                     recentlyCompleted={completedTaskIds.includes(task.id)}
                   />
@@ -330,8 +440,8 @@ export function WorkflowCommandCenter({
               : null}
             {viewMode === 'graph' && projection ? (
               <GraphView
-                tasks={tasksInOrder}
-                orderedTaskIds={projection.tasksTopologicalOrder}
+                tasks={filteredTasks}
+                orderedTaskIds={filteredTasks.map((task) => task.id)}
                 dependencies={projection.dependencies}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
@@ -339,9 +449,10 @@ export function WorkflowCommandCenter({
                 completingTaskId={completingTaskId}
                 newlyReadyTaskIds={newlyReadyTaskIds}
                 completedTaskIds={completedTaskIds}
+                getIneligibleReason={getIneligibleReason}
               />
             ) : null}
-            {tasksInOrder.length === 0 ? (
+            {filteredTasks.length === 0 ? (
               <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-slate-700">
                 Load projection to view tasks.
               </div>
@@ -352,6 +463,19 @@ export function WorkflowCommandCenter({
             <TaskDrawer
               task={selectedTask}
               projection={projection}
+              actorId={actorId}
+              approvingDecision={
+                approvingTaskId && selectedTask?.id === approvingTaskId
+                  ? approvingDecision
+                  : null
+              }
+              completeDisabledReason={
+                actorId && selectedTask?.canComplete === false
+                  ? getIneligibleReason(selectedTask)
+                  : undefined
+              }
+              onApprove={handleApprove}
+              onCopyBlockers={handleCopyBlockers}
               onClose={() => setSelectedTaskId(null)}
             />
             <AuditTimeline timeline={timeline} loading={loading} />

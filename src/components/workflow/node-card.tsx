@@ -9,6 +9,7 @@ type NodeCardProps = {
   isNewlyReady: boolean
   isCompleted: boolean
   isCompleting: boolean
+  completeDisabledReason?: string
   onHoverStart: () => void
   onHoverEnd: () => void
   onSelect: () => void
@@ -23,6 +24,7 @@ export function NodeCard({
   isNewlyReady,
   isCompleted,
   isCompleting,
+  completeDisabledReason,
   onHoverStart,
   onHoverEnd,
   onSelect,
@@ -92,6 +94,7 @@ export function NodeCard({
             onComplete()
           }}
           disabled={!task.canComplete || isCompleting}
+          title={task.canComplete ? 'Mark task done' : completeDisabledReason}
           className={[
             'rounded-md px-2 py-1 text-[10px] font-semibold text-white disabled:cursor-not-allowed',
             task.canComplete ? 'bg-blue-600 hover:bg-blue-500' : 'bg-zinc-300',
