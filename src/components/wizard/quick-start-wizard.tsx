@@ -5,13 +5,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   createEco,
+  fetchTenantUsers,
   fetchTemplateVersions,
   instantiateEco,
+  type TenantUserOption,
   type TemplateVersionOption,
 } from '@/lib/api-client'
 import { useDebugMode } from '@/components/workflow/debug-mode'
 
 type WizardStep = 1 | 2 | 3
+const TENANT_STORAGE_KEY = 'ecomp_tenantId'
+const ACTOR_STORAGE_KEY = 'ecomp_actorId'
 
 function getDefaultTemplateVersionId(templates: TemplateVersionOption[]) {
   const globalLive = templates.find(
@@ -31,7 +35,10 @@ export function QuickStartWizard() {
   const [step, setStep] = useState<WizardStep>(1)
   const [tenantId, setTenantId] = useState(searchParams.get('tenantId') ?? '')
   const [actorId, setActorId] = useState(searchParams.get('actorId') ?? '')
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [jobTitle, setJobTitle] = useState('')
+  const [users, setUsers] = useState<TenantUserOption[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
   const [templates, setTemplates] = useState<TemplateVersionOption[]>([])
   const [templateVersionId, setTemplateVersionId] = useState('')
   const [loadingTemplates, setLoadingTemplates] = useState(false)
@@ -43,9 +50,76 @@ export function QuickStartWizard() {
     [templates, templateVersionId]
   )
 
+  const selectedActor = useMemo(
+    () => users.find((user) => user.id === actorId) ?? null,
+    [users, actorId]
+  )
+
+  useEffect(() => {
+    const searchTenant = searchParams.get('tenantId') ?? ''
+    const searchActor = searchParams.get('actorId') ?? ''
+    if (searchTenant || searchActor) {
+      return
+    }
+
+    const storedTenantId = window.localStorage.getItem(TENANT_STORAGE_KEY) ?? ''
+    const storedActorId = window.localStorage.getItem(ACTOR_STORAGE_KEY) ?? ''
+    if (storedTenantId) {
+      setTenantId(storedTenantId)
+    }
+    if (storedActorId) {
+      setActorId(storedActorId)
+    }
+  }, [searchParams])
+
+  useEffect(() => {
+    if (!tenantId) {
+      window.localStorage.removeItem(TENANT_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(TENANT_STORAGE_KEY, tenantId)
+  }, [tenantId])
+
+  useEffect(() => {
+    if (!actorId) {
+      window.localStorage.removeItem(ACTOR_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(ACTOR_STORAGE_KEY, actorId)
+  }, [actorId])
+
+  async function loadUsers() {
+    if (!tenantId) {
+      setUsers([])
+      return
+    }
+
+    setLoadingUsers(true)
+    setMessage('')
+    try {
+      const result = await fetchTenantUsers(tenantId)
+      if (!result.ok) {
+        setUsers([])
+        setMessage(`Could not load users (${result.status}): ${result.error}`)
+        return
+      }
+
+      setUsers(result.data)
+      if (!actorId && result.data[0]?.id) {
+        setActorId(result.data[0].id)
+      }
+      if (actorId && !result.data.some((user) => user.id === actorId)) {
+        setActorId(result.data[0]?.id ?? '')
+      }
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
+
   async function loadTemplates() {
     if (!tenantId) {
-      setMessage('Workspace is required before picking a template')
+      setTemplates([])
+      setTemplateVersionId('')
       return
     }
 
@@ -61,7 +135,7 @@ export function QuickStartWizard() {
       setTemplates(result.data.templateVersions)
       setTemplateVersionId(getDefaultTemplateVersionId(result.data.templateVersions))
       if (result.data.templateVersions.length === 0) {
-        setMessage('No live templates found. Add one in Templates first.')
+        setMessage('No live templates yet. Create one in Templates.')
       }
     } finally {
       setLoadingTemplates(false)
@@ -70,14 +144,37 @@ export function QuickStartWizard() {
 
   useEffect(() => {
     if (tenantId) {
+      void loadUsers()
       void loadTemplates()
+      return
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setUsers([])
+    setTemplates([])
+    setTemplateVersionId('')
+    setActorId('')
   }, [tenantId])
 
+  useEffect(() => {
+    if (!actorId) {
+      return
+    }
+    if (users.length > 0 && !users.some((user) => user.id === actorId)) {
+      setActorId('')
+    }
+  }, [users, actorId])
+
+  useEffect(() => {
+    if (templateVersionId) {
+      return
+    }
+    if (templates.length > 0) {
+      setTemplateVersionId(getDefaultTemplateVersionId(templates))
+    }
+  }, [templates, templateVersionId])
+
   async function handleStartJob() {
-    if (!tenantId || !jobTitle.trim() || !templateVersionId) {
-      setMessage('Job name, workspace, and template are required')
+    if (!tenantId || !actorId || !jobTitle.trim() || !templateVersionId) {
+      setMessage('Job name, workspace, actor, and template are required')
       return
     }
 
@@ -94,7 +191,7 @@ export function QuickStartWizard() {
         tenantId,
         ecoId: ecoResult.data.ecoId,
         templateVersionId,
-        actorId: actorId || undefined,
+        actorId,
       })
       if (!instantiateResult.ok) {
         setMessage(`Could not start job (${instantiateResult.status}): ${instantiateResult.error}`)
@@ -105,9 +202,7 @@ export function QuickStartWizard() {
         tenantId,
         ecoId: ecoResult.data.ecoId,
       })
-      if (actorId) {
-        params.set('actorId', actorId)
-      }
+      params.set('actorId', actorId)
 
       router.push(`/workflow?${params.toString()}`)
     } finally {
@@ -134,22 +229,53 @@ export function QuickStartWizard() {
           </p>
         ) : null}
 
-        {debugMode ? (
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            <input
-              value={tenantId}
-              onChange={(event) => setTenantId(event.target.value)}
-              placeholder="tenantId"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
-            />
-            <input
+        <details
+          open={settingsOpen || debugMode}
+          onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+          className="rounded-xl border border-zinc-200 p-4"
+        >
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-900">
+            Settings {tenantId ? '(Workspace configured)' : '(Required to launch)'}
+          </summary>
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <input
+                value={tenantId}
+                onChange={(event) => setTenantId(event.target.value)}
+                placeholder="workspace id"
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+              />
+              <button
+                type="button"
+                onClick={() => void loadUsers()}
+                disabled={!tenantId || loadingUsers}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 disabled:opacity-50"
+              >
+                {loadingUsers ? 'Loading users…' : 'Load users'}
+              </button>
+            </div>
+
+            <select
               value={actorId}
               onChange={(event) => setActorId(event.target.value)}
-              placeholder="actorId (optional)"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
-            />
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+              disabled={!tenantId || loadingUsers}
+            >
+              <option value="">Select actor…</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.email}
+                </option>
+              ))}
+            </select>
+
+            {selectedActor ? (
+              <p className="text-xs text-zinc-600">Signed in as {selectedActor.email}</p>
+            ) : (
+              <p className="text-xs text-zinc-600">Choose an actor to launch and complete tasks.</p>
+            )}
           </div>
-        ) : null}
+        </details>
 
         {step === 1 ? (
           <section className="space-y-3 rounded-xl border border-zinc-200 p-4">
@@ -176,6 +302,11 @@ export function QuickStartWizard() {
         {step === 2 ? (
           <section className="space-y-3 rounded-xl border border-zinc-200 p-4">
             <p className="text-sm font-semibold text-zinc-900">Pick a template</p>
+            {!tenantId ? (
+              <p className="rounded bg-zinc-100 px-3 py-2 text-xs text-zinc-700">
+                Open Settings to choose your workspace.
+              </p>
+            ) : null}
             <button
               type="button"
               onClick={() => void loadTemplates()}
@@ -198,6 +329,14 @@ export function QuickStartWizard() {
                 </option>
               ))}
             </select>
+            {tenantId && !loadingTemplates && templates.length === 0 ? (
+              <p className="rounded bg-zinc-100 px-3 py-2 text-xs text-zinc-700">
+                No live templates yet.{' '}
+                <Link href="/templates" className="font-semibold text-blue-700 underline">
+                  Create one in Templates.
+                </Link>
+              </p>
+            ) : null}
 
             <div className="flex justify-between">
               <button
@@ -210,7 +349,7 @@ export function QuickStartWizard() {
               <button
                 type="button"
                 onClick={() => setStep(3)}
-                disabled={!templateVersionId}
+                disabled={!tenantId || !templateVersionId}
                 className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 Next
@@ -224,6 +363,8 @@ export function QuickStartWizard() {
             <p className="text-sm font-semibold text-zinc-900">Ready to start working?</p>
             <div className="rounded bg-zinc-100 px-3 py-2 text-xs text-zinc-700">
               <p>Job: {jobTitle || '—'}</p>
+              <p>Workspace: {tenantId ? 'Configured' : 'Not set'}</p>
+              <p>Actor: {selectedActor?.email ?? 'Not set'}</p>
               <p>
                 Template:{' '}
                 {selectedTemplate
@@ -244,7 +385,7 @@ export function QuickStartWizard() {
               <button
                 type="button"
                 onClick={() => void handleStartJob()}
-                disabled={starting || !jobTitle.trim() || !templateVersionId}
+                disabled={starting || !jobTitle.trim() || !tenantId || !actorId || !templateVersionId}
                 className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {starting ? 'Starting…' : 'Start job'}
