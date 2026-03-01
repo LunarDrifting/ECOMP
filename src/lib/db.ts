@@ -425,6 +425,7 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
           },
           select: {
             id: true,
+            ecoId: true,
             ownerRoleId: true,
             state: true,
             approvalPolicy: true,
@@ -527,6 +528,18 @@ export function tenantDb(tenantId: string, dbClient: TenantDbClient = prisma) {
             state: 'NOT_STARTED',
           },
           data: { state: 'DONE' },
+        }),
+
+      markNotRequiredByIdForCustomization: (taskId: string) =>
+        client.task.updateMany({
+          where: {
+            tenantId,
+            id: taskId,
+            state: {
+              in: ['NOT_STARTED', 'BLOCKED'],
+            },
+          },
+          data: { state: 'NOT_REQUIRED' },
         }),
 
       listStatesByIds: (taskIds: string[]) =>

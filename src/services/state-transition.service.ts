@@ -2,7 +2,7 @@ import { TaskState } from '@prisma/client'
 
 export const ILLEGAL_STATE_TRANSITION_ERROR = 'Illegal state transition'
 
-type TransitionContext = 'instantiation' | 'resolver' | 'completion'
+type TransitionContext = 'instantiation' | 'resolver' | 'completion' | 'customization'
 
 type TransitionCheckInput = {
   fromState: TaskState
@@ -29,6 +29,13 @@ export function canTransition({
 
   if (fromState === 'NOT_STARTED' && toState === 'BLOCKED') {
     return context === 'instantiation'
+  }
+
+  if (
+    toState === 'NOT_REQUIRED' &&
+    (fromState === 'NOT_STARTED' || fromState === 'BLOCKED')
+  ) {
+    return context === 'customization'
   }
 
   return false
