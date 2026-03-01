@@ -101,6 +101,7 @@ export function WorkflowCommandCenter({
   const [customizeMode, setCustomizeMode] = useState(false)
   const [customOrderTaskIds, setCustomOrderTaskIds] = useState<string[]>([])
   const [customizationDirty, setCustomizationDirty] = useState(false)
+  const [customizationSaved, setCustomizationSaved] = useState(false)
   const [savingCustomization, setSavingCustomization] = useState(false)
   const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -351,6 +352,7 @@ export function WorkflowCommandCenter({
       } else {
         setMessage(`Task updated: ${result.data.status}`)
         setCustomizationDirty(true)
+        setCustomizationSaved(false)
       }
 
       setCustomOrderTaskIds((current) => current.filter((id) => id !== taskId))
@@ -385,8 +387,9 @@ export function WorkflowCommandCenter({
         return
       }
 
-      setMessage('Saved')
+      setMessage('Saved ✓')
       setCustomizationDirty(false)
+      setCustomizationSaved(true)
       setCustomizeMode(false)
       await refreshData({ previousProjection: projection })
     } finally {
@@ -397,6 +400,7 @@ export function WorkflowCommandCenter({
   function handleCancelCustomization() {
     setCustomizeMode(false)
     setCustomizationDirty(false)
+    setCustomizationSaved(false)
     if (!projection) {
       return
     }
@@ -595,6 +599,7 @@ export function WorkflowCommandCenter({
       return nextOrderTaskIds
     })
     setCustomizationDirty(true)
+    setCustomizationSaved(false)
   }
 
   function SortableListTaskRow({
@@ -803,6 +808,7 @@ export function WorkflowCommandCenter({
                   onClick={() => {
                     setCustomOrderTaskIds(listOrderTaskIds)
                     setCustomizationDirty(false)
+                    setCustomizationSaved(false)
                     setCustomizeMode(true)
                     setShowCustomizeBanner(false)
                   }}
@@ -822,16 +828,21 @@ export function WorkflowCommandCenter({
           ) : null}
 
           {customizeMode ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <div className="sticky top-2 z-10 mt-3 flex flex-wrap items-center gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
               <span>Customize mode: reorder tasks and hide tasks for this job.</span>
               <button
                 type="button"
                 onClick={() => void handleSaveTaskOrder()}
                 disabled={savingCustomization || !customizationDirty}
-                className="rounded bg-amber-600 px-2 py-1 font-semibold text-white disabled:opacity-50"
+                className="rounded bg-amber-700 px-3 py-1.5 font-semibold text-white disabled:opacity-50"
               >
-                {savingCustomization ? 'Saving…' : 'Save'}
+                {savingCustomization ? 'Saving…' : 'Save changes'}
               </button>
+              {customizationSaved && !customizationDirty ? (
+                <span className="rounded bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-800">
+                  Saved ✓
+                </span>
+              ) : null}
               <button
                 type="button"
                 onClick={handleCancelCustomization}
