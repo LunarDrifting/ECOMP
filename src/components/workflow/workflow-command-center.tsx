@@ -20,6 +20,7 @@ import { TaskRow } from '@/components/workflow/task-row'
 import { TaskDrawer } from '@/components/workflow/task-drawer'
 import { AuditTimeline } from '@/components/workflow/audit-timeline'
 import { GraphView } from '@/components/workflow/graph-view'
+import { useDebugMode } from '@/components/workflow/debug-mode'
 
 type WorkflowCommandCenterProps = {
   initialTenantId?: string
@@ -32,6 +33,7 @@ export function WorkflowCommandCenter({
   initialEcoId = '',
   initialActorId = '',
 }: WorkflowCommandCenterProps) {
+  const { debugMode, setDebugMode } = useDebugMode()
   const [tenantId, setTenantId] = useState(initialTenantId)
   const [ecoId, setEcoId] = useState(initialEcoId)
   const [actorId, setActorId] = useState(initialActorId)
@@ -113,6 +115,18 @@ export function WorkflowCommandCenter({
       )
     })
   }, [filter, search, tasksInOrder])
+
+  const taskNameById = useMemo(() => {
+    return Object.fromEntries((projection?.tasks ?? []).map((task) => [task.id, task.name]))
+  }, [projection])
+
+  const selectedEcoTitle = useMemo(() => {
+    const fromList = ecos.find((eco) => eco.id === ecoId)?.title
+    if (fromList) {
+      return fromList
+    }
+    return projection ? `ECO ${projection.ecoId.slice(0, 8)}` : '—'
+  }, [ecos, ecoId, projection])
 
   const selectedTask = useMemo(
     () => projection?.tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -342,34 +356,57 @@ export function WorkflowCommandCenter({
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-zinc-900">Workflow Command Center</h1>
-              <p className="text-xs text-slate-700">ECO: {projection?.ecoId || ecoId || '—'}</p>
+              <p className="text-xs text-slate-700">ECO: {selectedEcoTitle}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                void refreshData()
-              }}
-              disabled={loading}
-              className="rounded-md bg-zinc-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-            >
-              {loading ? 'Loading…' : 'Refresh'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDebugMode(!debugMode)}
+                className={[
+                  'rounded-md border px-3 py-2 text-xs font-semibold',
+                  debugMode
+                    ? 'border-zinc-900 bg-zinc-900 text-white'
+                    : 'border-zinc-300 bg-white text-slate-700',
+                ].join(' ')}
+              >
+                Debug {debugMode ? 'ON' : 'OFF'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void refreshData()
+                }}
+                disabled={loading}
+                className="rounded-md bg-zinc-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {loading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-3">
-            <input
-              value={tenantId}
-              onChange={(event) => setTenantId(event.target.value)}
-              placeholder="tenantId"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
-            />
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <div
+            className={[
+              'mb-4 grid grid-cols-1 gap-2',
+              debugMode ? 'md:grid-cols-3' : 'md:grid-cols-2',
+            ].join(' ')}
+          >
+            {debugMode ? (
               <input
-                value={ecoId}
-                onChange={(event) => setEcoId(event.target.value)}
-                placeholder="ecoId"
+                value={tenantId}
+                onChange={(event) => setTenantId(event.target.value)}
+                placeholder="tenantId"
                 className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
               />
+            ) : null}
+            <div className={debugMode ? 'grid grid-cols-[minmax(0,1fr)_auto] gap-2' : ''}>
+              {debugMode ? (
+                <input
+                  value={ecoId}
+                  onChange={(event) => setEcoId(event.target.value)}
+                  placeholder="ecoId"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
+                />
+              ) : null}
               <select
                 value={ecoId}
                 onChange={(event) => {
@@ -377,7 +414,7 @@ export function WorkflowCommandCenter({
                 }}
                 className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-slate-900"
               >
-                <option value="">ECO list</option>
+                <option value="">Select ECO…</option>
                 {ecos.map((eco) => (
                   <option key={eco.id} value={eco.id}>
                     {eco.title}
@@ -477,6 +514,7 @@ export function WorkflowCommandCenter({
                   <TaskRow
                     key={task.id}
                     task={task}
+                    debugMode={debugMode}
                     onSelect={() => setSelectedTaskId(task.id)}
                     onComplete={() => handleComplete(task.id)}
                     completing={completingTaskId === task.id}
@@ -501,6 +539,7 @@ export function WorkflowCommandCenter({
                 completingTaskId={completingTaskId}
                 newlyReadyTaskIds={newlyReadyTaskIds}
                 completedTaskIds={completedTaskIds}
+                debugMode={debugMode}
                 getIneligibleReason={getIneligibleReason}
               />
             ) : null}
@@ -515,6 +554,8 @@ export function WorkflowCommandCenter({
             <TaskDrawer
               task={selectedTask}
               projection={projection}
+              debugMode={debugMode}
+              taskNameById={taskNameById}
               actorId={actorId}
               approvingDecision={
                 approvingTaskId && selectedTask?.id === approvingTaskId
@@ -530,7 +571,7 @@ export function WorkflowCommandCenter({
               onCopyBlockers={handleCopyBlockers}
               onClose={() => setSelectedTaskId(null)}
             />
-            <AuditTimeline timeline={timeline} loading={loading} />
+            <AuditTimeline timeline={timeline} loading={loading} debugMode={debugMode} />
           </div>
         </div>
       </div>

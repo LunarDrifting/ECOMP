@@ -4,6 +4,8 @@ import { StateBadge } from '@/components/workflow/state-badge'
 type TaskDrawerProps = {
   task: WorkflowProjectionTask | null
   projection: WorkflowProjectionResponse | null
+  debugMode: boolean
+  taskNameById: Record<string, string>
   actorId: string
   approvingDecision: 'APPROVED' | 'REJECTED' | null
   completeDisabledReason?: string
@@ -15,6 +17,8 @@ type TaskDrawerProps = {
 export function TaskDrawer({
   task,
   projection,
+  debugMode,
+  taskNameById,
   actorId,
   approvingDecision,
   completeDisabledReason,
@@ -35,6 +39,9 @@ export function TaskDrawer({
   const rejectedCount = approvals.filter((item) => item.decision === 'REJECTED').length
   const gates = projection.gates.filter((item) => item.taskId === task.id)
   const actorPresent = actorId.length > 0
+  const blockerNames = task.blockingTaskIds
+    .map((id) => taskNameById[id])
+    .filter((name): name is string => !!name)
 
   return (
     <aside
@@ -43,8 +50,8 @@ export function TaskDrawer({
     >
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-zinc-900">{task.name ?? task.id}</h3>
-          <p className="truncate text-xs text-zinc-500">{task.id}</p>
+          <h3 className="truncate text-sm font-semibold text-zinc-900">{task.name ?? 'Task'}</h3>
+          {debugMode ? <p className="truncate text-xs text-zinc-500">{task.id}</p> : null}
         </div>
         <button
           type="button"
@@ -68,32 +75,43 @@ export function TaskDrawer({
       <div className="space-y-3 text-xs text-zinc-700">
         <div>
           <div className="flex items-center justify-between gap-2">
-            <p className="font-semibold text-zinc-900">Blocking Task IDs</p>
-            <button
-              type="button"
-              onClick={() => onCopyBlockers(task.blockingTaskIds)}
-              disabled={task.blockingTaskIds.length === 0}
-              className="rounded border border-zinc-200 px-2 py-1 text-[11px] font-semibold text-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
-              title={
-                task.blockingTaskIds.length === 0
-                  ? 'No blockers to copy'
-                  : 'Copy blocker IDs'
-              }
-            >
-              Copy IDs
-            </button>
+            <p className="font-semibold text-zinc-900">
+              {debugMode ? 'Blocking Task IDs' : `Blocking Tasks (${task.blockingTaskIds.length})`}
+            </p>
+            {debugMode ? (
+              <button
+                type="button"
+                onClick={() => onCopyBlockers(task.blockingTaskIds)}
+                disabled={task.blockingTaskIds.length === 0}
+                className="rounded border border-zinc-200 px-2 py-1 text-[11px] font-semibold text-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+                title={
+                  task.blockingTaskIds.length === 0
+                    ? 'No blockers to copy'
+                    : 'Copy blocker IDs'
+                }
+              >
+                Copy IDs
+              </button>
+            ) : null}
           </div>
           {task.blockingTaskIds.length > 0 ? (
             <ul className="mt-1 space-y-1">
-              {task.blockingTaskIds.map((id) => (
-                <li key={id} className="truncate rounded bg-zinc-100 px-2 py-1">
-                  {id}
+              {(debugMode ? task.blockingTaskIds : blockerNames).map((value) => (
+                <li key={value} className="truncate rounded bg-zinc-100 px-2 py-1">
+                  {value}
                 </li>
               ))}
             </ul>
           ) : (
             <p className="mt-1 text-zinc-500">None</p>
           )}
+          {!debugMode &&
+          task.blockingTaskIds.length > 0 &&
+          blockerNames.length !== task.blockingTaskIds.length ? (
+            <p className="mt-1 text-zinc-500">
+              {task.blockingTaskIds.length} blocking tasks
+            </p>
+          ) : null}
         </div>
 
         <div>

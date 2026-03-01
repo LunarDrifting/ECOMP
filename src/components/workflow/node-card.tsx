@@ -3,6 +3,7 @@ import { StateBadge } from '@/components/workflow/state-badge'
 
 type NodeCardProps = {
   task: WorkflowProjectionTask
+  debugMode: boolean
   isSelected: boolean
   isHighlighted: boolean
   isDimmed: boolean
@@ -18,6 +19,7 @@ type NodeCardProps = {
 
 export function NodeCard({
   task,
+  debugMode,
   isSelected,
   isHighlighted,
   isDimmed,
@@ -39,14 +41,18 @@ export function NodeCard({
       onMouseEnter={onHoverStart}
       onMouseLeave={onHoverEnd}
       onClick={onSelect}
-      title={[
-        `upstream: ${task.upstreamTaskIds.length}`,
-        `downstream: ${task.downstreamTaskIds.length}`,
-        `blockers: ${task.blockingTaskIds.length}`,
-        `requiresApproval: ${task.requiresApproval ? 'yes' : 'no'}`,
-        `requiresPrecondition: ${task.requiresPrecondition ? 'yes' : 'no'}`,
-        `canComplete: ${task.canComplete === null ? 'n/a' : String(task.canComplete)}`,
-      ].join('\n')}
+      title={
+        debugMode
+          ? [
+              `upstream: ${task.upstreamTaskIds.length}`,
+              `downstream: ${task.downstreamTaskIds.length}`,
+              `blockers: ${task.blockingTaskIds.length}`,
+              `requiresApproval: ${task.requiresApproval ? 'yes' : 'no'}`,
+              `requiresPrecondition: ${task.requiresPrecondition ? 'yes' : 'no'}`,
+              `canComplete: ${task.canComplete === null ? 'n/a' : String(task.canComplete)}`,
+            ].join('\n')
+          : `Upstream ${task.upstreamTaskIds.length}, downstream ${task.downstreamTaskIds.length}, blockers ${task.blockingTaskIds.length}`
+      }
       className={[
         'h-full w-full rounded-xl border p-3 text-left transition duration-200',
         isSelected ? 'border-blue-500' : 'border-zinc-200',
@@ -66,7 +72,9 @@ export function NodeCard({
         <StateBadge state={task.state} />
       </div>
 
-      <p className="truncate text-[11px] text-slate-500">{task.id}</p>
+      {debugMode ? (
+        <p className="truncate text-[11px] text-slate-500">{task.id}</p>
+      ) : null}
       <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
         <span>↑ {task.upstreamTaskIds.length}</span>
         <span>↓ {task.downstreamTaskIds.length}</span>

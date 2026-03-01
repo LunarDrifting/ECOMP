@@ -19,6 +19,7 @@ type GraphViewProps = {
   completingTaskId: string | null
   newlyReadyTaskIds: string[]
   completedTaskIds: string[]
+  debugMode: boolean
   getIneligibleReason: (task: WorkflowProjectionTask) => string
 }
 
@@ -48,6 +49,7 @@ export function GraphView({
   completingTaskId,
   newlyReadyTaskIds,
   completedTaskIds,
+  debugMode,
   getIneligibleReason,
 }: GraphViewProps) {
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
@@ -326,6 +328,7 @@ export function GraphView({
                 <foreignObject key={task.id} x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT}>
                   <NodeCard
                     task={task}
+                    debugMode={debugMode}
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
                     isDimmed={isDimmed}

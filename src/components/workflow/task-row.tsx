@@ -3,6 +3,7 @@ import { StateBadge } from '@/components/workflow/state-badge'
 
 type TaskRowProps = {
   task: WorkflowProjectionTask
+  debugMode: boolean
   onSelect: () => void
   onComplete: () => void
   completing: boolean
@@ -13,6 +14,7 @@ type TaskRowProps = {
 
 export function TaskRow({
   task,
+  debugMode,
   onSelect,
   onComplete,
   completing,
@@ -36,7 +38,9 @@ export function TaskRow({
         title="Open details"
       >
         <div className="truncate text-sm font-semibold text-slate-900">{task.name ?? task.id}</div>
-        <div className="truncate text-xs text-slate-700">{task.id}</div>
+        {debugMode ? (
+          <div className="truncate text-xs text-slate-700">{task.id}</div>
+        ) : null}
       </button>
 
       <StateBadge state={task.state} />
