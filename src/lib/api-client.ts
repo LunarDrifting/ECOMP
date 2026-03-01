@@ -88,6 +88,20 @@ type CreateApprovalResponse = {
   status: string
 }
 
+type SetTaskOrderResponse = {
+  tenantId: string
+  ecoId: string
+  orderedTaskIds: string[]
+  status: string
+}
+
+type PatchTaskCustomizationResponse = {
+  tenantId: string
+  taskId: string
+  state: 'NOT_REQUIRED'
+  status: string
+}
+
 type CreateEcoResponse = {
   tenantId: string
   ecoId: string
@@ -217,6 +231,37 @@ export async function createApproval(args: {
       actorId: args.actorId,
       decision: args.decision,
       ...(args.comment ? { comment: args.comment } : {}),
+    }),
+  })
+}
+
+export async function setEcoTaskOrder(args: {
+  tenantId: string
+  ecoId: string
+  actorId?: string
+  orderedTaskIds: string[]
+}) {
+  return requestJson<SetTaskOrderResponse>(`/api/ecos/${args.ecoId}/task-order`, {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId: args.tenantId,
+      ...(args.actorId ? { actorId: args.actorId } : {}),
+      orderedTaskIds: args.orderedTaskIds,
+    }),
+  })
+}
+
+export async function markTaskNotRequired(args: {
+  tenantId: string
+  taskId: string
+  actorId?: string
+}) {
+  return requestJson<PatchTaskCustomizationResponse>(`/api/tasks/${args.taskId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      tenantId: args.tenantId,
+      ...(args.actorId ? { actorId: args.actorId } : {}),
+      state: 'NOT_REQUIRED',
     }),
   })
 }
