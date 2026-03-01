@@ -24,3 +24,26 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes graph-dash-wave {
+  from {
+    stroke-dashoffset: 36;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes graph-glow-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(14, 165, 233, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 4px rgba(14, 165, 233, 0.55));
+  }
+}
+
+.graph-wave-edge {
+  animation: graph-dash-wave 1.5s linear infinite, graph-glow-pulse 1.5s ease-in-out infinite;
+}

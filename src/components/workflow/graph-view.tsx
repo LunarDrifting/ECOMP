@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { WorkflowProjectionTask } from '@/lib/api-client'
-import { StateBadge } from '@/components/workflow/state-badge'
+import { EdgeLayer } from '@/components/workflow/edge-layer'
+import { GraphControls } from '@/components/workflow/graph-controls'
+import { NodeCard } from '@/components/workflow/node-card'
 
 type DependencyEdge = {
   fromTaskId: string
@@ -23,14 +25,17 @@ type PositionedNode = {
   task: WorkflowProjectionTask
   x: number
   y: number
-  layer: number
 }
 
-const NODE_WIDTH = 248
-const NODE_HEIGHT = 118
-const LAYER_GAP = 192
-const ROW_GAP = 24
-const PADDING = 24
+const NODE_WIDTH = 264
+const NODE_HEIGHT = 132
+const LAYER_GAP = 180
+const ROW_GAP = 28
+const PADDING = 30
+
+function clampScale(value: number) {
+  return Math.max(0.6, Math.min(1.8, value))
+}
 
 export function GraphView({
   tasks,
@@ -44,15 +49,13 @@ export function GraphView({
   completedTaskIds,
 }: GraphViewProps) {
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
+  const [scale, setScale] = useState(1)
+  const [panX, setPanX] = useState(0)
+  const [panY, setPanY] = useState(0)
+  const [isPanning, setIsPanning] = useState(false)
+  const [lastPointer, setLastPointer] = useState<{ x: number; y: number } | null>(null)
 
-  const {
-    positionedNodes,
-    width,
-    height,
-    upstreamByTaskId,
-    downstreamByTaskId,
-    positionByTaskId,
-  } = useMemo(() => {
+  const layout = useMemo(() => {
     const taskById = new Map(tasks.map((task) => [task.id, task]))
     const effectiveOrder = orderedTaskIds.filter((taskId) => taskById.has(taskId))
 
@@ -70,8 +73,8 @@ export function GraphView({
       if (!upstreamById.has(edge.toTaskId) || !downstreamById.has(edge.fromTaskId)) {
         continue
       }
-      upstreamById.get(edge.toTaskId)!.add(edge.fromTaskId)
-      downstreamById.get(edge.fromTaskId)!.add(edge.toTaskId)
+      upstreamById.get(edge.toTaskId)?.add(edge.fromTaskId)
+      downstreamById.get(edge.fromTaskId)?.add(edge.toTaskId)
     }
 
     const layerByTaskId = new Map<string, number>()
@@ -106,8 +109,8 @@ export function GraphView({
     }
 
     const sortedLayers = Array.from(nodesByLayer.keys()).sort((a, b) => a - b)
-    const positioned: PositionedNode[] = []
-    const xyByTaskId = new Map<string, { x: number; y: number }>()
+    const positionedNodes: PositionedNode[] = []
+    const positionByTaskId = new Map<string, { x: number; y: number }>()
     let maxNodesInLayer = 1
 
     for (const layer of sortedLayers) {
@@ -116,23 +119,27 @@ export function GraphView({
       layerNodes.forEach((task, rowIndex) => {
         const x = PADDING + layer * (NODE_WIDTH + LAYER_GAP)
         const y = PADDING + rowIndex * (NODE_HEIGHT + ROW_GAP)
-        positioned.push({ task, x, y, layer })
-        xyByTaskId.set(task.id, { x, y })
+        positionedNodes.push({ task, x, y })
+        positionByTaskId.set(task.id, { x, y })
       })
     }
 
-    const canvasWidth =
-      PADDING * 2 + Math.max(1, sortedLayers.length) * NODE_WIDTH + Math.max(0, sortedLayers.length - 1) * LAYER_GAP
-    const canvasHeight =
-      PADDING * 2 + maxNodesInLayer * NODE_HEIGHT + Math.max(0, maxNodesInLayer - 1) * ROW_GAP
+    const width =
+      PADDING * 2 +
+      Math.max(1, sortedLayers.length) * NODE_WIDTH +
+      Math.max(0, sortedLayers.length - 1) * LAYER_GAP
+    const height =
+      PADDING * 2 +
+      maxNodesInLayer * NODE_HEIGHT +
+      Math.max(0, maxNodesInLayer - 1) * ROW_GAP
 
     return {
-      positionedNodes: positioned,
-      width: canvasWidth,
-      height: canvasHeight,
+      positionedNodes,
+      width,
+      height,
       upstreamByTaskId: upstreamById,
       downstreamByTaskId: downstreamById,
-      positionByTaskId: xyByTaskId,
+      positionByTaskId,
     }
   }, [tasks, orderedTaskIds, dependencies])
 
@@ -160,124 +167,180 @@ export function GraphView({
           }
           visited.add(next)
           nodeSet.add(next)
-          edgeSet.add(
-            edgeDirection === 'up' ? `${next}->${current}` : `${current}->${next}`
-          )
+          edgeSet.add(edgeDirection === 'up' ? `${next}->${current}` : `${current}->${next}`)
           queue.push(next)
         }
       }
     }
 
-    visit(hoveredTaskId, upstreamByTaskId, 'up')
-    visit(hoveredTaskId, downstreamByTaskId, 'down')
+    visit(hoveredTaskId, layout.upstreamByTaskId, 'up')
+    visit(hoveredTaskId, layout.downstreamByTaskId, 'down')
 
     return { highlightedNodes: nodeSet, highlightedEdges: edgeSet }
-  }, [hoveredTaskId, downstreamByTaskId, upstreamByTaskId])
+  }, [hoveredTaskId, layout.downstreamByTaskId, layout.upstreamByTaskId])
+
+  const waveEdgeKeys = useMemo(() => {
+    if (completedTaskIds.length === 0 || newlyReadyTaskIds.length === 0) {
+      return new Set<string>()
+    }
+
+    const completedSet = new Set(completedTaskIds)
+    const newlyReadySet = new Set(newlyReadyTaskIds)
+    const edgeSet = new Set<string>()
+
+    for (const edge of dependencies) {
+      if (completedSet.has(edge.fromTaskId) && newlyReadySet.has(edge.toTaskId)) {
+        edgeSet.add(`${edge.fromTaskId}->${edge.toTaskId}`)
+      }
+    }
+
+    if (edgeSet.size > 0) {
+      return edgeSet
+    }
+
+    for (const targetTaskId of newlyReadyTaskIds) {
+      const queue: string[] = [targetTaskId]
+      const prev = new Map<string, string>()
+      const visited = new Set<string>([targetTaskId])
+      let matchedCompleted: string | null = null
+
+      while (queue.length > 0 && !matchedCompleted) {
+        const current = queue.shift()!
+        const upstreamNeighbors = Array.from(layout.upstreamByTaskId.get(current) ?? []).sort()
+        for (const upstreamId of upstreamNeighbors) {
+          if (visited.has(upstreamId)) {
+            continue
+          }
+          visited.add(upstreamId)
+          prev.set(upstreamId, current)
+          if (completedSet.has(upstreamId)) {
+            matchedCompleted = upstreamId
+            break
+          }
+          queue.push(upstreamId)
+        }
+      }
+
+      if (!matchedCompleted) {
+        continue
+      }
+
+      let cursor = matchedCompleted
+      while (prev.has(cursor)) {
+        const next = prev.get(cursor)!
+        edgeSet.add(`${cursor}->${next}`)
+        cursor = next
+      }
+    }
+
+    return edgeSet
+  }, [completedTaskIds, dependencies, layout.upstreamByTaskId, newlyReadyTaskIds])
+
+  const renderEdges = useMemo(() => {
+    return dependencies
+      .map((edge) => {
+        const from = layout.positionByTaskId.get(edge.fromTaskId)
+        const to = layout.positionByTaskId.get(edge.toTaskId)
+        if (!from || !to) {
+          return null
+        }
+
+        const startX = from.x + NODE_WIDTH
+        const startY = from.y + NODE_HEIGHT / 2
+        const endX = to.x
+        const endY = to.y + NODE_HEIGHT / 2
+        const controlOffset = Math.max(52, (endX - startX) / 2)
+        const path = `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
+        const key = `${edge.fromTaskId}->${edge.toTaskId}`
+
+        return {
+          key,
+          path,
+          isHighlighted: highlightedEdges.has(key),
+          isWave: waveEdgeKeys.has(key),
+        }
+      })
+      .filter((edge): edge is NonNullable<typeof edge> => edge !== null)
+  }, [dependencies, highlightedEdges, layout.positionByTaskId, waveEdgeKeys])
+
+  const hasHoverFocus = hoveredTaskId !== null
 
   return (
-    <div className="overflow-auto rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
-      <svg width={width} height={height} className="block min-w-full">
-        {dependencies.map((edge) => {
-          const from = positionByTaskId.get(edge.fromTaskId)
-          const to = positionByTaskId.get(edge.toTaskId)
-          if (!from || !to) {
-            return null
-          }
+    <div
+      className="relative overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm"
+      onWheel={(event) => {
+        event.preventDefault()
+        const multiplier = event.deltaY > 0 ? 0.9 : 1.1
+        setScale((current) => clampScale(current * multiplier))
+      }}
+      onPointerDown={(event) => {
+        setIsPanning(true)
+        setLastPointer({ x: event.clientX, y: event.clientY })
+      }}
+      onPointerMove={(event) => {
+        if (!isPanning || !lastPointer) {
+          return
+        }
+        const dx = event.clientX - lastPointer.x
+        const dy = event.clientY - lastPointer.y
+        setPanX((current) => current + dx)
+        setPanY((current) => current + dy)
+        setLastPointer({ x: event.clientX, y: event.clientY })
+      }}
+      onPointerUp={() => {
+        setIsPanning(false)
+        setLastPointer(null)
+      }}
+      onPointerLeave={() => {
+        setIsPanning(false)
+        setLastPointer(null)
+      }}
+    >
+      <GraphControls
+        scale={scale}
+        onZoomIn={() => setScale((current) => clampScale(current * 1.1))}
+        onZoomOut={() => setScale((current) => clampScale(current * 0.9))}
+        onReset={() => {
+          setScale(1)
+          setPanX(0)
+          setPanY(0)
+        }}
+      />
 
-          const startX = from.x + NODE_WIDTH
-          const startY = from.y + NODE_HEIGHT / 2
-          const endX = to.x
-          const endY = to.y + NODE_HEIGHT / 2
-          const controlOffset = Math.max(48, (endX - startX) / 2)
-          const path = `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
-          const edgeKey = `${edge.fromTaskId}->${edge.toTaskId}`
-          const isHighlighted = highlightedEdges.has(edgeKey)
+      <div className="overflow-auto p-3">
+        <svg width={layout.width} height={layout.height} className="block min-w-full">
+          <g transform={`translate(${panX} ${panY}) scale(${scale})`}>
+            <EdgeLayer edges={renderEdges} />
 
-          return (
-            <path
-              key={edgeKey}
-              d={path}
-              fill="none"
-              stroke={isHighlighted ? '#0f766e' : '#d4d4d8'}
-              strokeWidth={isHighlighted ? 2.5 : 1.5}
-              opacity={isHighlighted ? 1 : 0.9}
-            />
-          )
-        })}
+            {layout.positionedNodes.map(({ task, x, y }) => {
+              const isSelected = selectedTaskId === task.id
+              const isHighlighted = hasHoverFocus ? highlightedNodes.has(task.id) : false
+              const isDimmed = hasHoverFocus ? !highlightedNodes.has(task.id) : false
+              const isNewlyReady = newlyReadyTaskIds.includes(task.id)
+              const isCompleted = completedTaskIds.includes(task.id)
+              const isCompleting = completingTaskId === task.id
 
-        {positionedNodes.map(({ task, x, y }) => {
-          const isSelected = selectedTaskId === task.id
-          const isHighlighted = hoveredTaskId ? highlightedNodes.has(task.id) : false
-          const isNewlyReady = newlyReadyTaskIds.includes(task.id)
-          const isCompleted = completedTaskIds.includes(task.id)
-          const isCompleting = completingTaskId === task.id
-
-          return (
-            <foreignObject
-              key={task.id}
-              x={x}
-              y={y}
-              width={NODE_WIDTH}
-              height={NODE_HEIGHT}
-            >
-              <button
-                type="button"
-                onMouseEnter={() => setHoveredTaskId(task.id)}
-                onMouseLeave={() => setHoveredTaskId(null)}
-                onClick={() => onSelectTask(task.id)}
-                className={[
-                  'h-full w-full rounded-xl border p-3 text-left transition',
-                  isSelected ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 bg-white',
-                  isHighlighted ? 'ring-2 ring-teal-500/40' : '',
-                  isCompleted ? 'border-emerald-500 bg-emerald-50' : '',
-                  isNewlyReady ? 'animate-[pulse_1.5s_ease-in-out]' : '',
-                ].join(' ')}
-              >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-semibold text-zinc-900">
-                    {task.name ?? task.id}
-                  </span>
-                  <StateBadge state={task.state} />
-                </div>
-
-                <p className="truncate text-[11px] text-zinc-500">{task.id}</p>
-                <div className="mt-2 flex items-center gap-1 text-[10px] text-zinc-600">
-                  <span>↑ {task.upstreamTaskIds.length}</span>
-                  <span>↓ {task.downstreamTaskIds.length}</span>
-                  <span>blockers {task.blockingTaskIds.length}</span>
-                </div>
-
-                <div className="mt-2 flex items-center gap-1">
-                  {task.requiresApproval ? (
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
-                      APPROVAL
-                    </span>
-                  ) : null}
-                  {task.requiresPrecondition ? (
-                    <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[9px] font-semibold text-zinc-700">
-                      PRE
-                    </span>
-                  ) : null}
-                </div>
-
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onCompleteTask(task.id)
-                    }}
-                    disabled={!task.canComplete || isCompleting}
-                    className="rounded-md bg-blue-600 px-2 py-1 text-[10px] font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-300"
-                  >
-                    {isCompleting ? 'Completing…' : 'Complete'}
-                  </button>
-                </div>
-              </button>
-            </foreignObject>
-          )
-        })}
-      </svg>
+              return (
+                <foreignObject key={task.id} x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT}>
+                  <NodeCard
+                    task={task}
+                    isSelected={isSelected}
+                    isHighlighted={isHighlighted}
+                    isDimmed={isDimmed}
+                    isNewlyReady={isNewlyReady}
+                    isCompleted={isCompleted}
+                    isCompleting={isCompleting}
+                    onHoverStart={() => setHoveredTaskId(task.id)}
+                    onHoverEnd={() => setHoveredTaskId(null)}
+                    onSelect={() => onSelectTask(task.id)}
+                    onComplete={() => onCompleteTask(task.id)}
+                  />
+                </foreignObject>
+              )
+            })}
+          </g>
+        </svg>
+      </div>
     </div>
   )
 }
