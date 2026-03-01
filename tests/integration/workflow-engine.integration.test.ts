@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { POST as instantiatePost } from '@/app/api/ecos/[id]/instantiate/route'
 import { POST as completePost } from '@/app/api/tasks/[id]/complete/route'
+import { POST as approvalPost } from '@/app/api/tasks/[id]/approvals/route'
 import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
 import { GET as auditGet } from '@/app/api/ecos/[id]/audit/route'
 import * as dbModule from '@/lib/db'
@@ -48,6 +49,23 @@ async function postComplete(body: Record<string, unknown>, taskId: string) {
   })
 
   const response = await completePost(request, {
+    params: Promise.resolve({ id: taskId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function postApproval(body: Record<string, unknown>, taskId: string) {
+  const request = new NextRequest(`http://localhost/api/tasks/${taskId}/approvals`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  const response = await approvalPost(request, {
     params: Promise.resolve({ id: taskId }),
   } as RouteContext)
 
@@ -452,6 +470,143 @@ describe.sequential('workflow engine integration', () => {
     })
 
     expect(state.state).toBe('NOT_STARTED')
+  })
+
+  it('duplicate approval submission by same actor returns deterministic 409', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Duplicate Approval ECO', tenantId: actors.tenantId },
+    })
+
+    const task = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Duplicate approval task',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'SINGLE',
+    })
+
+    const first = await postApproval(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+        decision: 'APPROVED',
+      },
+      task.id
+    )
+    expect(first.status).toBe(200)
+
+    const second = await postApproval(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+        decision: 'APPROVED',
+      },
+      task.id
+    )
+    expect(second.status).toBe(409)
+    expect(second.json.error).toBe('Approval already submitted for task')
+
+    const approvals = await testPrisma.approval.findMany({
+      where: {
+        tenantId: actors.tenantId,
+        taskId: task.id,
+        actorId: actors.ownerActorId,
+      },
+    })
+    expect(approvals).toHaveLength(1)
+  })
+
+  it('REJECTED-only approvals do not satisfy SINGLE, PARALLEL, or QUORUM policies', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Rejected-Only Policies ECO', tenantId: actors.tenantId },
+    })
+
+    const singleTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Single policy task',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'SINGLE',
+    })
+
+    const parallelTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Parallel policy task',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'PARALLEL',
+    })
+
+    const quorumTask = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Quorum policy task',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'QUORUM',
+    })
+
+    const secondOwner = await testPrisma.user.create({
+      data: {
+        email: `second-owner-${singleTask.id.slice(0, 6)}@example.com`,
+        tenantId: actors.tenantId,
+      },
+    })
+    await testPrisma.userRole.create({
+      data: {
+        userId: secondOwner.id,
+        roleId: actors.ownerRoleId,
+      },
+    })
+
+    for (const taskId of [singleTask.id, parallelTask.id, quorumTask.id]) {
+      const firstReject = await postApproval(
+        {
+          tenantId: actors.tenantId,
+          actorId: actors.ownerActorId,
+          decision: 'REJECTED',
+        },
+        taskId
+      )
+      expect(firstReject.status).toBe(200)
+
+      const secondReject = await postApproval(
+        {
+          tenantId: actors.tenantId,
+          actorId: secondOwner.id,
+          decision: 'REJECTED',
+        },
+        taskId
+      )
+      expect(secondReject.status).toBe(200)
+    }
+
+    for (const taskId of [singleTask.id, parallelTask.id, quorumTask.id]) {
+      const completion = await postComplete(
+        {
+          tenantId: actors.tenantId,
+          actorId: actors.ownerActorId,
+        },
+        taskId
+      )
+      expect(completion.status).toBe(409)
+      expect(completion.json.error).toBe('Approval policy requirements not satisfied')
+    }
+
+    const finalStates = await testPrisma.task.findMany({
+      where: {
+        id: { in: [singleTask.id, parallelTask.id, quorumTask.id] },
+      },
+      select: { id: true, state: true },
+    })
+    for (const row of finalStates) {
+      expect(row.state).toBe('NOT_STARTED')
+    }
   })
 
   it('gate failure returns 409 and does not mutate state', async () => {

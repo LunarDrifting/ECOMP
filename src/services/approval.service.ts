@@ -2,6 +2,7 @@ import { tenantDb } from '@/lib/db'
 
 const APPROVAL_CREATION_FORBIDDEN_ERROR =
   'Forbidden: actor not authorized to create approval'
+export const DUPLICATE_APPROVAL_ERROR = 'Approval already submitted for task'
 
 type CreateApprovalInput = {
   tenantId: string
@@ -66,6 +67,26 @@ export async function createApproval({
       },
     })
     throw new Error(APPROVAL_CREATION_FORBIDDEN_ERROR)
+  }
+
+  const existingApprovals = await db.approval.listByTaskId(taskId)
+  const hasExistingActorDecision = existingApprovals.some(
+    (approval) => approval.actorId === actorId
+  )
+
+  if (hasExistingActorDecision) {
+    await db.audit.emitAuditEvent({
+      taskId,
+      actorId,
+      eventType: 'APPROVAL_CREATE_REJECTED',
+      payload: {
+        taskId,
+        actorId,
+        decision,
+        reasonCode: 'DUPLICATE_SUBMISSION',
+      },
+    })
+    throw new Error(DUPLICATE_APPROVAL_ERROR)
   }
 
   const approval = await db.approval.createForTask({

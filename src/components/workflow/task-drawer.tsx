@@ -31,6 +31,8 @@ export function TaskDrawer({
   }
 
   const approvals = projection.approvals.filter((item) => item.taskId === task.id)
+  const approvedCount = approvals.filter((item) => item.decision === 'APPROVED').length
+  const rejectedCount = approvals.filter((item) => item.decision === 'REJECTED').length
   const gates = projection.gates.filter((item) => item.taskId === task.id)
   const actorPresent = actorId.length > 0
 
@@ -96,7 +98,11 @@ export function TaskDrawer({
 
         <div>
           <p className="font-semibold text-zinc-900">Approvals</p>
-          <p className="mt-1 text-zinc-600">Total: {approvals.length}</p>
+          <div className="mt-1 space-y-0.5 text-zinc-600">
+            <p>Total: {approvals.length}</p>
+            <p>Approved: {approvedCount}</p>
+            <p>Rejected: {rejectedCount}</p>
+          </div>
           <div className="mt-2 flex items-center gap-2">
             <button
               type="button"

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createApproval } from '@/services/approval.service'
+import { createApproval, DUPLICATE_APPROVAL_ERROR } from '@/services/approval.service'
 
 type RouteContext = {
   params: Promise<{
@@ -48,6 +48,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     if (message.includes('Forbidden:')) {
       return NextResponse.json({ error: message }, { status: 403 })
+    }
+
+    if (message === DUPLICATE_APPROVAL_ERROR) {
+      return NextResponse.json({ error: message }, { status: 409 })
     }
 
     return NextResponse.json({ error: message }, { status: 500 })

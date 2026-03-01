@@ -166,17 +166,22 @@ function evaluateApprovalPolicy({
   const approvedApprovals = approvals.filter(
     (approval) => approval.decision === 'APPROVED'
   )
+  const rejectedApprovals = approvals.filter(
+    (approval) => approval.decision === 'REJECTED'
+  )
 
   if (approvalPolicy === 'SINGLE') {
+    // SINGLE semantics: only APPROVED rows can satisfy the policy.
     return approvedApprovals.length > 0
   }
 
   if (approvalPolicy === 'SEQUENTIAL') {
-    const hasRejected = approvals.some((approval) => approval.decision === 'REJECTED')
-    return !hasRejected && approvedApprovals.length > 0
+    // SEQUENTIAL semantics: any rejection blocks completion in this phase.
+    return rejectedApprovals.length === 0 && approvedApprovals.length > 0
   }
 
   if (approvalPolicy === 'PARALLEL') {
+    // PARALLEL (minimal): require owner-role APPROVED, ignore REJECTED rows.
     const roleIdsByActorId = new Map<string, Set<string>>()
     for (const assignment of actorRoles) {
       const roleIds = roleIdsByActorId.get(assignment.userId) ?? new Set<string>()
@@ -190,6 +195,7 @@ function evaluateApprovalPolicy({
   }
 
   if (approvalPolicy === 'QUORUM') {
+    // QUORUM: count distinct actors with APPROVED decisions only.
     const distinctApprovedActors = new Set(
       approvedApprovals.map((approval) => approval.actorId)
     )
