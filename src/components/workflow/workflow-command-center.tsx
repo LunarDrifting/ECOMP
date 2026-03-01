@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   completeTask,
   createApproval,
@@ -8,6 +8,8 @@ import {
   fetchEcos,
   fetchProjection,
   fetchTenantUsers,
+  markTaskNotRequired,
+  setEcoTaskOrder,
   type EcoOption,
   type WorkflowProjectionTask,
   type AuditTimelineResponse,
@@ -21,6 +23,10 @@ import { TaskDrawer } from '@/components/workflow/task-drawer'
 import { AuditTimeline } from '@/components/workflow/audit-timeline'
 import { GraphView } from '@/components/workflow/graph-view'
 import { useDebugMode } from '@/components/workflow/debug-mode'
+import {
+  applyDeterministicTaskOrder,
+  getLatestSavedTaskOrder,
+} from '@/components/workflow/task-order'
 
 type WorkflowCommandCenterProps = {
   initialTenantId?: string
@@ -54,6 +60,10 @@ export function WorkflowCommandCenter({
   const [ecos, setEcos] = useState<EcoOption[]>([])
   const [newlyReadyTaskIds, setNewlyReadyTaskIds] = useState<string[]>([])
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([])
+  const [showCustomizeBanner, setShowCustomizeBanner] = useState(true)
+  const [customizeMode, setCustomizeMode] = useState(false)
+  const [customOrderTaskIds, setCustomOrderTaskIds] = useState<string[]>([])
+  const [savingCustomization, setSavingCustomization] = useState(false)
   const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -64,7 +74,7 @@ export function WorkflowCommandCenter({
     }
   }, [])
 
-  const tasksInOrder = useMemo(() => {
+  const topologicalTasks = useMemo(() => {
     if (!projection) {
       return []
     }
@@ -72,8 +82,53 @@ export function WorkflowCommandCenter({
     const taskById = new Map(projection.tasks.map((task) => [task.id, task]))
     return projection.tasksTopologicalOrder
       .map((taskId) => taskById.get(taskId))
-      .filter((task): task is NonNullable<typeof task> => !!task)
+      .filter(
+        (task): task is NonNullable<typeof task> =>
+          !!task && task.state !== 'NOT_REQUIRED'
+      )
   }, [projection])
+
+  const savedOrderedTaskIds = useMemo(() => {
+    if (!timeline) {
+      return []
+    }
+    return getLatestSavedTaskOrder(
+      timeline.events.map((event) => ({
+        eventType: event.eventType,
+        payload: event.payload as Record<string, unknown>,
+      }))
+    )
+  }, [timeline])
+
+  const listOrderTaskIds = useMemo(() => {
+    if (!projection) {
+      return []
+    }
+
+    if (customizeMode && customOrderTaskIds.length > 0) {
+      return customOrderTaskIds
+    }
+
+    return applyDeterministicTaskOrder({
+      tasks: projection.tasks,
+      tasksTopologicalOrder: projection.tasksTopologicalOrder,
+      savedOrderedTaskIds,
+      excludeNotRequired: true,
+    }).finalOrder
+  }, [projection, savedOrderedTaskIds, customizeMode, customOrderTaskIds])
+
+  const listTasksInOrder = useMemo(() => {
+    if (!projection) {
+      return []
+    }
+    const taskById = new Map(projection.tasks.map((task) => [task.id, task]))
+    return listOrderTaskIds
+      .map((taskId) => taskById.get(taskId))
+      .filter(
+        (task): task is NonNullable<typeof task> =>
+          !!task && task.state !== 'NOT_REQUIRED'
+      )
+  }, [projection, listOrderTaskIds])
 
   function getIneligibleReason(task: WorkflowProjectionTask): string {
     if (task.state === 'DONE') {
@@ -91,10 +146,8 @@ export function WorkflowCommandCenter({
     return 'Not eligible'
   }
 
-  const filteredTasks = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase()
-
-    return tasksInOrder.filter((task) => {
+  const filterPredicate = useCallback(
+    (task: WorkflowProjectionTask, normalizedSearch: string) => {
       const filterMatch =
         filter === 'ALL' ||
         (filter === 'READY' && task.isReady) ||
@@ -113,8 +166,20 @@ export function WorkflowCommandCenter({
         task.id.toLowerCase().includes(normalizedSearch) ||
         task.name.toLowerCase().includes(normalizedSearch)
       )
-    })
-  }, [filter, search, tasksInOrder])
+    },
+    [filter]
+  )
+
+  const filteredListTasks = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase()
+
+    return listTasksInOrder.filter((task) => filterPredicate(task, normalizedSearch))
+  }, [search, listTasksInOrder, filterPredicate])
+
+  const filteredGraphTasks = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase()
+    return topologicalTasks.filter((task) => filterPredicate(task, normalizedSearch))
+  }, [search, topologicalTasks, filterPredicate])
 
   const taskNameById = useMemo(() => {
     return Object.fromEntries((projection?.tasks ?? []).map((task) => [task.id, task.name]))
@@ -132,6 +197,20 @@ export function WorkflowCommandCenter({
     () => projection?.tasks.find((task) => task.id === selectedTaskId) ?? null,
     [projection, selectedTaskId]
   )
+
+  const customizationDirty = useMemo(() => {
+    if (!projection) {
+      return false
+    }
+    const current = listOrderTaskIds.join('|')
+    const fromSaved = applyDeterministicTaskOrder({
+      tasks: projection.tasks,
+      tasksTopologicalOrder: projection.tasksTopologicalOrder,
+      savedOrderedTaskIds,
+      excludeNotRequired: true,
+    }).finalOrder.join('|')
+    return current !== fromSaved
+  }, [projection, listOrderTaskIds, savedOrderedTaskIds])
 
   async function refreshData(options?: {
     animateDiff?: boolean
@@ -189,6 +268,20 @@ export function WorkflowCommandCenter({
       }
 
       setProjection(projectionResult.data)
+      if (!customizeMode) {
+        const defaultListOrder = applyDeterministicTaskOrder({
+          tasks: projectionResult.data.tasks,
+          tasksTopologicalOrder: projectionResult.data.tasksTopologicalOrder,
+          savedOrderedTaskIds: getLatestSavedTaskOrder(
+            (auditResult.ok ? auditResult.data.events : []).map((event) => ({
+              eventType: event.eventType,
+              payload: event.payload as Record<string, unknown>,
+            }))
+          ),
+          excludeNotRequired: true,
+        }).finalOrder
+        setCustomOrderTaskIds(defaultListOrder)
+      }
 
       if (auditResult.ok) {
         setTimeline(auditResult.data)
@@ -198,6 +291,95 @@ export function WorkflowCommandCenter({
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleMoveTask(taskId: string, direction: -1 | 1) {
+    if (!customizeMode) {
+      return
+    }
+    setCustomOrderTaskIds((current) => {
+      const index = current.indexOf(taskId)
+      if (index < 0) {
+        return current
+      }
+      const nextIndex = index + direction
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current
+      }
+      const next = [...current]
+      const [item] = next.splice(index, 1)
+      next.splice(nextIndex, 0, item)
+      return next
+    })
+  }
+
+  async function handleMarkTaskNotRequired(taskId: string) {
+    if (!tenantId) {
+      setMessage('tenantId is required')
+      return
+    }
+
+    setSavingCustomization(true)
+    setMessage('')
+    try {
+      const result = await markTaskNotRequired({
+        tenantId,
+        taskId,
+        actorId: actorId || undefined,
+      })
+      if (!result.ok) {
+        setMessage(`Hide task failed (${result.status}): ${result.error}`)
+      } else {
+        setMessage(`Task updated: ${result.data.status}`)
+      }
+
+      setCustomOrderTaskIds((current) => current.filter((id) => id !== taskId))
+      await refreshData({ previousProjection: projection })
+    } finally {
+      setSavingCustomization(false)
+    }
+  }
+
+  async function handleSaveTaskOrder() {
+    if (!tenantId || !ecoId) {
+      setMessage('tenantId and ecoId are required')
+      return
+    }
+
+    setSavingCustomization(true)
+    setMessage('')
+    try {
+      const result = await setEcoTaskOrder({
+        tenantId,
+        ecoId,
+        actorId: actorId || undefined,
+        orderedTaskIds: customOrderTaskIds,
+      })
+      if (!result.ok) {
+        setMessage(`Save order failed (${result.status}): ${result.error}`)
+        return
+      }
+
+      setMessage('Task order preference saved')
+      setCustomizeMode(false)
+      await refreshData({ previousProjection: projection })
+    } finally {
+      setSavingCustomization(false)
+    }
+  }
+
+  function handleCancelCustomization() {
+    setCustomizeMode(false)
+    if (!projection) {
+      return
+    }
+    const ordered = applyDeterministicTaskOrder({
+      tasks: projection.tasks,
+      tasksTopologicalOrder: projection.tasksTopologicalOrder,
+      savedOrderedTaskIds,
+      excludeNotRequired: true,
+    }).finalOrder
+    setCustomOrderTaskIds(ordered)
   }
 
   useEffect(() => {
@@ -496,6 +678,53 @@ export function WorkflowCommandCenter({
             </button>
           </div>
 
+          {showCustomizeBanner ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <span>Want to customize tasks for this job?</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomizeMode(true)
+                    setShowCustomizeBanner(false)
+                  }}
+                  className="rounded bg-blue-600 px-2 py-1 font-semibold text-white"
+                >
+                  Customize
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomizeBanner(false)}
+                  className="rounded border border-blue-300 bg-white px-2 py-1 font-semibold text-blue-800"
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {customizeMode ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <span>Customize mode: reorder tasks and hide tasks for this job.</span>
+              <button
+                type="button"
+                onClick={() => void handleSaveTaskOrder()}
+                disabled={savingCustomization || !customizationDirty}
+                className="rounded bg-amber-600 px-2 py-1 font-semibold text-white disabled:opacity-50"
+              >
+                {savingCustomization ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelCustomization}
+                disabled={savingCustomization}
+                className="rounded border border-amber-300 bg-white px-2 py-1 font-semibold text-amber-900 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : null}
+
           {message ? (
             <p className="mt-3 rounded bg-zinc-100 px-2 py-1 text-xs text-slate-700">{message}</p>
           ) : null}
@@ -510,14 +739,30 @@ export function WorkflowCommandCenter({
               onSearchChange={setSearch}
             />
             {viewMode === 'list'
-              ? filteredTasks.map((task) => (
+              ? filteredListTasks.map((task, index) => (
                   <TaskRow
                     key={task.id}
                     task={task}
                     debugMode={debugMode}
+                    customizeMode={customizeMode}
+                    customizationDirty={customizationDirty}
                     onSelect={() => setSelectedTaskId(task.id)}
                     onComplete={() => handleComplete(task.id)}
+                    onMoveUp={
+                      customizeMode && index > 0
+                        ? () => handleMoveTask(task.id, -1)
+                        : undefined
+                    }
+                    onMoveDown={
+                      customizeMode && index < filteredListTasks.length - 1
+                        ? () => handleMoveTask(task.id, 1)
+                        : undefined
+                    }
+                    onMarkNotRequired={
+                      customizeMode ? () => void handleMarkTaskNotRequired(task.id) : undefined
+                    }
                     completing={completingTaskId === task.id}
+                    customizing={savingCustomization}
                     completeDisabledReason={
                       actorId && task.canComplete === false
                         ? getIneligibleReason(task)
@@ -530,8 +775,8 @@ export function WorkflowCommandCenter({
               : null}
             {viewMode === 'graph' && projection ? (
               <GraphView
-                tasks={filteredTasks}
-                orderedTaskIds={filteredTasks.map((task) => task.id)}
+                tasks={filteredGraphTasks}
+                orderedTaskIds={filteredGraphTasks.map((task) => task.id)}
                 dependencies={projection.dependencies}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
@@ -543,7 +788,8 @@ export function WorkflowCommandCenter({
                 getIneligibleReason={getIneligibleReason}
               />
             ) : null}
-            {filteredTasks.length === 0 ? (
+            {(viewMode === 'list' ? filteredListTasks.length : filteredGraphTasks.length) ===
+            0 ? (
               <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-slate-700">
                 Load projection to view tasks.
               </div>

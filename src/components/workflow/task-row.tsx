@@ -4,9 +4,15 @@ import { StateBadge } from '@/components/workflow/state-badge'
 type TaskRowProps = {
   task: WorkflowProjectionTask
   debugMode: boolean
+  customizeMode?: boolean
+  customizationDirty?: boolean
   onSelect: () => void
   onComplete: () => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
+  onMarkNotRequired?: () => void
   completing: boolean
+  customizing?: boolean
   completeDisabledReason?: string
   newlyReady?: boolean
   recentlyCompleted?: boolean
@@ -15,9 +21,15 @@ type TaskRowProps = {
 export function TaskRow({
   task,
   debugMode,
+  customizeMode = false,
+  customizationDirty = false,
   onSelect,
   onComplete,
+  onMoveUp,
+  onMoveDown,
+  onMarkNotRequired,
   completing,
+  customizing = false,
   completeDisabledReason,
   newlyReady = false,
   recentlyCompleted = false,
@@ -73,12 +85,48 @@ export function TaskRow({
         <button
           type="button"
           onClick={onComplete}
-          disabled={task.canComplete !== true || completing}
+          disabled={customizeMode || task.canComplete !== true || completing}
           title={task.canComplete !== true ? completeDisabledReason : 'Mark task done'}
           className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {completing ? 'Completing…' : 'Complete'}
         </button>
+        {customizeMode ? (
+          <>
+            <button
+              type="button"
+              onClick={onMoveUp}
+              disabled={customizing || !onMoveUp}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold text-zinc-700 disabled:opacity-50"
+              title="Move task up"
+            >
+              Up
+            </button>
+            <button
+              type="button"
+              onClick={onMoveDown}
+              disabled={customizing || !onMoveDown}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold text-zinc-700 disabled:opacity-50"
+              title="Move task down"
+            >
+              Down
+            </button>
+            <button
+              type="button"
+              onClick={onMarkNotRequired}
+              disabled={customizing || !onMarkNotRequired}
+              className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-50"
+              title="Hide task for this job (NOT_REQUIRED)"
+            >
+              Hide
+            </button>
+            {customizationDirty ? (
+              <span className="rounded bg-blue-100 px-2 py-1 text-[10px] font-semibold text-blue-800">
+                Unsaved order
+              </span>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </div>
   )

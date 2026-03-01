@@ -35,6 +35,8 @@ function friendlyAuditMessage(eventType: string) {
     APPROVAL_CREATE_SUCCESS: 'Approval recorded',
     APPROVAL_CREATE_REJECTED: 'Approval submission rejected',
     GATE_PRECONDITION_FAILED: 'Precondition gate blocked completion',
+    TASK_ORDER_SET: 'Task order saved',
+    TASK_MARKED_NOT_REQUIRED: 'Task hidden for this job',
   }
 
   return labels[eventType] ?? 'Workflow event recorded'
