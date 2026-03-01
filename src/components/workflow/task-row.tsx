@@ -1,4 +1,5 @@
 import type { WorkflowProjectionTask } from '@/lib/api-client'
+import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { StateBadge } from '@/components/workflow/state-badge'
 
 type TaskRowProps = {
@@ -8,9 +9,10 @@ type TaskRowProps = {
   customizationDirty?: boolean
   onSelect: () => void
   onComplete: () => void
-  onMoveUp?: () => void
-  onMoveDown?: () => void
   onMarkNotRequired?: () => void
+  dragHandleAttributes?: DraggableAttributes
+  dragHandleListeners?: DraggableSyntheticListeners
+  isDragging?: boolean
   completing: boolean
   customizing?: boolean
   completeDisabledReason?: string
@@ -25,9 +27,10 @@ export function TaskRow({
   customizationDirty = false,
   onSelect,
   onComplete,
-  onMoveUp,
-  onMoveDown,
   onMarkNotRequired,
+  dragHandleAttributes,
+  dragHandleListeners,
+  isDragging = false,
   completing,
   customizing = false,
   completeDisabledReason,
@@ -37,12 +40,27 @@ export function TaskRow({
   return (
     <div
       className={[
-        'grid grid-cols-[minmax(0,1.8fr)_auto_auto_auto_auto_auto] items-center gap-3 rounded-xl border bg-white p-3 transition hover:border-zinc-300 hover:shadow-sm',
+        'grid items-center gap-3 rounded-xl border bg-white p-3 transition hover:border-zinc-300 hover:shadow-sm',
+        customizeMode
+          ? 'grid-cols-[auto_minmax(0,1.8fr)_auto_auto_auto_auto_auto]'
+          : 'grid-cols-[minmax(0,1.8fr)_auto_auto_auto_auto_auto]',
         recentlyCompleted ? 'border-emerald-500 bg-emerald-50' : 'border-zinc-200',
+        isDragging ? 'opacity-80 ring-2 ring-blue-300' : '',
         newlyReady ? 'animate-[pulse_1.5s_ease-in-out]' : '',
       ].join(' ')}
       style={{ transitionDuration: '180ms' }}
     >
+      {customizeMode ? (
+        <button
+          type="button"
+          className="cursor-grab rounded-md border border-zinc-300 bg-zinc-50 px-2 py-1 text-xs text-zinc-700 active:cursor-grabbing"
+          title="Drag to reorder"
+          {...dragHandleAttributes}
+          {...dragHandleListeners}
+        >
+          Drag
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onSelect}
@@ -93,24 +111,6 @@ export function TaskRow({
         </button>
         {customizeMode ? (
           <>
-            <button
-              type="button"
-              onClick={onMoveUp}
-              disabled={customizing || !onMoveUp}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold text-zinc-700 disabled:opacity-50"
-              title="Move task up"
-            >
-              Up
-            </button>
-            <button
-              type="button"
-              onClick={onMoveDown}
-              disabled={customizing || !onMoveDown}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold text-zinc-700 disabled:opacity-50"
-              title="Move task down"
-            >
-              Down
-            </button>
             <button
               type="button"
               onClick={onMarkNotRequired}

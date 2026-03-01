@@ -235,7 +235,7 @@ export async function createApproval(args: {
   })
 }
 
-export async function setEcoTaskOrder(args: {
+export async function saveTaskOrder(args: {
   tenantId: string
   ecoId: string
   actorId?: string
@@ -249,6 +249,15 @@ export async function setEcoTaskOrder(args: {
       orderedTaskIds: args.orderedTaskIds,
     }),
   })
+}
+
+export async function setEcoTaskOrder(args: {
+  tenantId: string
+  ecoId: string
+  actorId?: string
+  orderedTaskIds: string[]
+}) {
+  return saveTaskOrder(args)
 }
 
 export async function markTaskNotRequired(args: {

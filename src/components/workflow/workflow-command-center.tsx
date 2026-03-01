@@ -2,6 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import {
   completeTask,
   createApproval,
   fetchAuditTimeline,
@@ -9,7 +24,7 @@ import {
   fetchProjection,
   fetchTenantUsers,
   markTaskNotRequired,
-  setEcoTaskOrder,
+  saveTaskOrder,
   type EcoOption,
   type WorkflowProjectionTask,
   type AuditTimelineResponse,
@@ -27,6 +42,28 @@ import {
   applyDeterministicTaskOrder,
   getLatestSavedTaskOrder,
 } from '@/components/workflow/task-order'
+
+function mergeVisibleTaskOrder(
+  currentOrderTaskIds: string[],
+  projectionData: WorkflowProjectionResponse
+) {
+  const visibleTaskIdSet = new Set(
+    projectionData.tasks
+      .filter((task) => task.state !== 'NOT_REQUIRED')
+      .map((task) => task.id)
+  )
+
+  const visibleTopoTaskIds = projectionData.tasksTopologicalOrder.filter((taskId) =>
+    visibleTaskIdSet.has(taskId)
+  )
+
+  const filteredCurrentOrder = currentOrderTaskIds.filter((taskId) =>
+    visibleTaskIdSet.has(taskId)
+  )
+  const existingIds = new Set(filteredCurrentOrder)
+  const appendedIds = visibleTopoTaskIds.filter((taskId) => !existingIds.has(taskId))
+  return [...filteredCurrentOrder, ...appendedIds]
+}
 
 type WorkflowCommandCenterProps = {
   initialTenantId?: string
@@ -63,6 +100,7 @@ export function WorkflowCommandCenter({
   const [showCustomizeBanner, setShowCustomizeBanner] = useState(true)
   const [customizeMode, setCustomizeMode] = useState(false)
   const [customOrderTaskIds, setCustomOrderTaskIds] = useState<string[]>([])
+  const [customizationDirty, setCustomizationDirty] = useState(false)
   const [savingCustomization, setSavingCustomization] = useState(false)
   const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -198,28 +236,20 @@ export function WorkflowCommandCenter({
     [projection, selectedTaskId]
   )
 
-  const customizationDirty = useMemo(() => {
-    if (!projection) {
-      return false
-    }
-    const current = listOrderTaskIds.join('|')
-    const fromSaved = applyDeterministicTaskOrder({
-      tasks: projection.tasks,
-      tasksTopologicalOrder: projection.tasksTopologicalOrder,
-      savedOrderedTaskIds,
-      excludeNotRequired: true,
-    }).finalOrder.join('|')
-    return current !== fromSaved
-  }, [projection, listOrderTaskIds, savedOrderedTaskIds])
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 4 },
+    })
+  )
 
   async function refreshData(options?: {
     animateDiff?: boolean
     previousProjection?: WorkflowProjectionResponse | null
     actorIdOverride?: string
-  }) {
+  }): Promise<WorkflowProjectionResponse | null> {
     if (!tenantId || !ecoId) {
       setMessage('tenantId and ecoId are required')
-      return
+      return null
     }
 
     const effectiveActorId = options?.actorIdOverride ?? actorId
@@ -233,7 +263,7 @@ export function WorkflowCommandCenter({
 
       if (!projectionResult.ok) {
         setMessage(`Projection load failed (${projectionResult.status}): ${projectionResult.error}`)
-        return
+        return null
       }
 
       if (options?.animateDiff && options.previousProjection) {
@@ -268,49 +298,38 @@ export function WorkflowCommandCenter({
       }
 
       setProjection(projectionResult.data)
-      if (!customizeMode) {
-        const defaultListOrder = applyDeterministicTaskOrder({
-          tasks: projectionResult.data.tasks,
-          tasksTopologicalOrder: projectionResult.data.tasksTopologicalOrder,
-          savedOrderedTaskIds: getLatestSavedTaskOrder(
-            (auditResult.ok ? auditResult.data.events : []).map((event) => ({
-              eventType: event.eventType,
-              payload: event.payload as Record<string, unknown>,
-            }))
-          ),
-          excludeNotRequired: true,
-        }).finalOrder
-        setCustomOrderTaskIds(defaultListOrder)
-      }
-
       if (auditResult.ok) {
         setTimeline(auditResult.data)
       } else {
         setMessage(`Audit load failed (${auditResult.status}): ${auditResult.error}`)
       }
+
+      const nextSavedOrderedTaskIds = getLatestSavedTaskOrder(
+        (auditResult.ok ? auditResult.data.events : []).map((event) => ({
+          eventType: event.eventType,
+          payload: event.payload as Record<string, unknown>,
+        }))
+      )
+
+      if (customizeMode) {
+        setCustomOrderTaskIds((currentOrderTaskIds) =>
+          mergeVisibleTaskOrder(currentOrderTaskIds, projectionResult.data)
+        )
+      } else {
+        const defaultListOrder = applyDeterministicTaskOrder({
+          tasks: projectionResult.data.tasks,
+          tasksTopologicalOrder: projectionResult.data.tasksTopologicalOrder,
+          savedOrderedTaskIds: nextSavedOrderedTaskIds,
+          excludeNotRequired: true,
+        }).finalOrder
+        setCustomOrderTaskIds(defaultListOrder)
+        setCustomizationDirty(false)
+      }
+
+      return projectionResult.data
     } finally {
       setLoading(false)
     }
-  }
-
-  function handleMoveTask(taskId: string, direction: -1 | 1) {
-    if (!customizeMode) {
-      return
-    }
-    setCustomOrderTaskIds((current) => {
-      const index = current.indexOf(taskId)
-      if (index < 0) {
-        return current
-      }
-      const nextIndex = index + direction
-      if (nextIndex < 0 || nextIndex >= current.length) {
-        return current
-      }
-      const next = [...current]
-      const [item] = next.splice(index, 1)
-      next.splice(nextIndex, 0, item)
-      return next
-    })
   }
 
   async function handleMarkTaskNotRequired(taskId: string) {
@@ -331,10 +350,16 @@ export function WorkflowCommandCenter({
         setMessage(`Hide task failed (${result.status}): ${result.error}`)
       } else {
         setMessage(`Task updated: ${result.data.status}`)
+        setCustomizationDirty(true)
       }
 
       setCustomOrderTaskIds((current) => current.filter((id) => id !== taskId))
-      await refreshData({ previousProjection: projection })
+      const refreshedProjection = await refreshData({ previousProjection: projection })
+      if (refreshedProjection) {
+        setCustomOrderTaskIds((currentOrderTaskIds) =>
+          mergeVisibleTaskOrder(currentOrderTaskIds, refreshedProjection)
+        )
+      }
     } finally {
       setSavingCustomization(false)
     }
@@ -349,7 +374,7 @@ export function WorkflowCommandCenter({
     setSavingCustomization(true)
     setMessage('')
     try {
-      const result = await setEcoTaskOrder({
+      const result = await saveTaskOrder({
         tenantId,
         ecoId,
         actorId: actorId || undefined,
@@ -360,7 +385,8 @@ export function WorkflowCommandCenter({
         return
       }
 
-      setMessage('Task order preference saved')
+      setMessage('Saved')
+      setCustomizationDirty(false)
       setCustomizeMode(false)
       await refreshData({ previousProjection: projection })
     } finally {
@@ -370,6 +396,7 @@ export function WorkflowCommandCenter({
 
   function handleCancelCustomization() {
     setCustomizeMode(false)
+    setCustomizationDirty(false)
     if (!projection) {
       return
     }
@@ -531,6 +558,95 @@ export function WorkflowCommandCenter({
     }
   }
 
+  function handleDragEnd(event: DragEndEvent) {
+    if (!customizeMode) {
+      return
+    }
+
+    const { active, over } = event
+    if (!over || active.id === over.id) {
+      return
+    }
+
+    const visibleTaskIds = filteredListTasks.map((task) => task.id)
+    const activeVisibleIndex = visibleTaskIds.indexOf(String(active.id))
+    const overVisibleIndex = visibleTaskIds.indexOf(String(over.id))
+    if (activeVisibleIndex < 0 || overVisibleIndex < 0) {
+      return
+    }
+
+    const reorderedVisibleTaskIds = arrayMove(
+      visibleTaskIds,
+      activeVisibleIndex,
+      overVisibleIndex
+    )
+    const visibleTaskIdSet = new Set(visibleTaskIds)
+
+    setCustomOrderTaskIds((currentOrderTaskIds) => {
+      const nextOrderTaskIds = [...currentOrderTaskIds]
+      let cursor = 0
+      for (let index = 0; index < nextOrderTaskIds.length; index += 1) {
+        const taskId = nextOrderTaskIds[index]
+        if (visibleTaskIdSet.has(taskId)) {
+          nextOrderTaskIds[index] = reorderedVisibleTaskIds[cursor] ?? taskId
+          cursor += 1
+        }
+      }
+      return nextOrderTaskIds
+    })
+    setCustomizationDirty(true)
+  }
+
+  function SortableListTaskRow({
+    task,
+    completeDisabledReason,
+  }: {
+    task: WorkflowProjectionTask
+    completeDisabledReason?: string
+  }) {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({
+      id: task.id,
+      disabled: !customizeMode || savingCustomization,
+    })
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={{
+          transform: CSS.Transform.toString(transform),
+          transition,
+        }}
+      >
+        <TaskRow
+          task={task}
+          debugMode={debugMode}
+          customizeMode={customizeMode}
+          customizationDirty={customizationDirty}
+          onSelect={() => setSelectedTaskId(task.id)}
+          onComplete={() => handleComplete(task.id)}
+          onMarkNotRequired={
+            customizeMode ? () => void handleMarkTaskNotRequired(task.id) : undefined
+          }
+          dragHandleAttributes={attributes}
+          dragHandleListeners={listeners}
+          isDragging={isDragging}
+          completing={completingTaskId === task.id}
+          customizing={savingCustomization}
+          completeDisabledReason={completeDisabledReason}
+          newlyReady={newlyReadyTaskIds.includes(task.id)}
+          recentlyCompleted={completedTaskIds.includes(task.id)}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 px-6 py-6 text-slate-900">
       <div className="mx-auto max-w-7xl space-y-4">
@@ -685,6 +801,8 @@ export function WorkflowCommandCenter({
                 <button
                   type="button"
                   onClick={() => {
+                    setCustomOrderTaskIds(listOrderTaskIds)
+                    setCustomizationDirty(false)
                     setCustomizeMode(true)
                     setShowCustomizeBanner(false)
                   }}
@@ -739,39 +857,52 @@ export function WorkflowCommandCenter({
               onSearchChange={setSearch}
             />
             {viewMode === 'list'
-              ? filteredListTasks.map((task, index) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    debugMode={debugMode}
-                    customizeMode={customizeMode}
-                    customizationDirty={customizationDirty}
-                    onSelect={() => setSelectedTaskId(task.id)}
-                    onComplete={() => handleComplete(task.id)}
-                    onMoveUp={
-                      customizeMode && index > 0
-                        ? () => handleMoveTask(task.id, -1)
-                        : undefined
-                    }
-                    onMoveDown={
-                      customizeMode && index < filteredListTasks.length - 1
-                        ? () => handleMoveTask(task.id, 1)
-                        : undefined
-                    }
-                    onMarkNotRequired={
-                      customizeMode ? () => void handleMarkTaskNotRequired(task.id) : undefined
-                    }
-                    completing={completingTaskId === task.id}
-                    customizing={savingCustomization}
-                    completeDisabledReason={
-                      actorId && task.canComplete === false
-                        ? getIneligibleReason(task)
-                        : undefined
-                    }
-                    newlyReady={newlyReadyTaskIds.includes(task.id)}
-                    recentlyCompleted={completedTaskIds.includes(task.id)}
-                  />
-                ))
+              ? customizeMode
+                ? (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <SortableContext
+                        items={filteredListTasks.map((task) => task.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {filteredListTasks.map((task) => (
+                          <SortableListTaskRow
+                            key={task.id}
+                            task={task}
+                            completeDisabledReason={
+                              actorId && task.canComplete === false
+                                ? getIneligibleReason(task)
+                                : undefined
+                            }
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
+                  )
+                : filteredListTasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      debugMode={debugMode}
+                      customizeMode={false}
+                      customizationDirty={false}
+                      onSelect={() => setSelectedTaskId(task.id)}
+                      onComplete={() => handleComplete(task.id)}
+                      onMarkNotRequired={undefined}
+                      completing={completingTaskId === task.id}
+                      customizing={savingCustomization}
+                      completeDisabledReason={
+                        actorId && task.canComplete === false
+                          ? getIneligibleReason(task)
+                          : undefined
+                      }
+                      newlyReady={newlyReadyTaskIds.includes(task.id)}
+                      recentlyCompleted={completedTaskIds.includes(task.id)}
+                    />
+                  ))
               : null}
             {viewMode === 'graph' && projection ? (
               <GraphView
