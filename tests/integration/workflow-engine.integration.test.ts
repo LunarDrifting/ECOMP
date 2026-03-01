@@ -7,11 +7,14 @@ import { GET as ecosGet, POST as ecosPost } from '@/app/api/ecos/route'
 import { GET as templateVersionsGet } from '@/app/api/template-versions/route'
 import { GET as projectionGet } from '@/app/api/ecos/[id]/projection/route'
 import { GET as auditGet } from '@/app/api/ecos/[id]/audit/route'
+import { POST as taskOrderPost } from '@/app/api/ecos/[id]/task-order/route'
 import { POST as validateTemplateVersionPost } from '@/app/api/template-versions/[id]/validate/route'
 import { POST as publishTemplateVersionPost } from '@/app/api/template-versions/[id]/publish/route'
 import { GET as templateTasksGet } from '@/app/api/template-versions/[id]/tasks/route'
 import { GET as templateDependenciesGet } from '@/app/api/template-versions/[id]/dependencies/route'
+import { PATCH as taskPatch } from '@/app/api/tasks/[id]/route'
 import * as dbModule from '@/lib/db'
+import { applyDeterministicTaskOrder, getLatestSavedTaskOrder } from '@/components/workflow/task-order'
 import {
   createBlueprintFixture,
   createTaskFixture,
@@ -156,6 +159,40 @@ async function getAudit(args: { tenantId: string; ecoId: string }) {
 
   const response = await auditGet(request, {
     params: Promise.resolve({ id: args.ecoId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function postTaskOrder(body: Record<string, unknown>, ecoId: string) {
+  const request = new NextRequest(`http://localhost/api/ecos/${ecoId}/task-order`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  const response = await taskOrderPost(request, {
+    params: Promise.resolve({ id: ecoId }),
+  } as RouteContext)
+
+  return {
+    status: response.status,
+    json: await response.json(),
+  }
+}
+
+async function patchTask(body: Record<string, unknown>, taskId: string) {
+  const request = new NextRequest(`http://localhost/api/tasks/${taskId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  const response = await taskPatch(request, {
+    params: Promise.resolve({ id: taskId }),
   } as RouteContext)
 
   return {
@@ -1773,5 +1810,158 @@ describe.sequential('workflow engine integration', () => {
       select: { state: true },
     })
     expect(task.state).toBe('BLOCKED')
+  })
+
+  it('quick-start flow can create eco and instantiate from selected template', async () => {
+    const actors = await createTenantActorsFixture()
+    const fixture = await createBlueprintFixture({
+      tenantId: actors.tenantId,
+      ownerRoleId: actors.ownerRoleId,
+      taskDefinitions: [
+        { key: 'a', name: 'Intake A' },
+        { key: 'b', name: 'Intake B' },
+      ],
+      dependencyDefinitions: [{ fromKey: 'a', toKey: 'b' }],
+    })
+
+    const createResult = await postEcos({
+      tenantId: actors.tenantId,
+      title: 'Quick Start Job',
+    })
+    expect(createResult.status).toBe(200)
+    expect(typeof createResult.json.ecoId).toBe('string')
+
+    const instantiateResult = await postInstantiate(
+      {
+        tenantId: actors.tenantId,
+        templateVersionId: fixture.templateVersionId,
+        actorId: actors.ownerActorId,
+      },
+      createResult.json.ecoId
+    )
+    expect(instantiateResult.status).toBe(200)
+    expect(instantiateResult.json.tasksCreated).toBeGreaterThan(0)
+
+    const projectionResult = await getProjection({
+      tenantId: actors.tenantId,
+      ecoId: createResult.json.ecoId,
+      actorId: actors.ownerActorId,
+    })
+    expect(projectionResult.status).toBe(200)
+    expect(projectionResult.json.tasks.length).toBeGreaterThan(0)
+  })
+
+  it('task order save writes TASK_ORDER_SET and applies deterministic merged order', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Task Order ECO', tenantId: actors.tenantId },
+    })
+    const taskA = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'A',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const taskB = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'B',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+    const taskC = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'C',
+      state: 'NOT_REQUIRED',
+      approvalPolicy: 'NONE',
+    })
+
+    const orderSave = await postTaskOrder(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+        orderedTaskIds: [taskB.id, 'bogus', taskA.id],
+      },
+      eco.id
+    )
+    expect(orderSave.status).toBe(409)
+
+    const validOrderSave = await postTaskOrder(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+        orderedTaskIds: [taskB.id, taskA.id],
+      },
+      eco.id
+    )
+    expect(validOrderSave.status).toBe(200)
+
+    const auditResult = await getAudit({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+    })
+    expect(auditResult.status).toBe(200)
+    expect(auditResult.json.events.some((event: { eventType: string }) => event.eventType === 'TASK_ORDER_SET')).toBe(true)
+
+    const savedOrder = getLatestSavedTaskOrder(
+      auditResult.json.events.map(
+        (event: { eventType: string; payload: Record<string, unknown> }) => ({
+          eventType: event.eventType,
+          payload: event.payload,
+        })
+      )
+    )
+    expect(savedOrder).toEqual([taskB.id, taskA.id])
+
+    const deterministicOrder = applyDeterministicTaskOrder({
+      tasks: [
+        { id: taskA.id, state: 'NOT_STARTED' },
+        { id: taskB.id, state: 'NOT_STARTED' },
+        { id: taskC.id, state: 'NOT_REQUIRED' },
+      ],
+      tasksTopologicalOrder: [taskA.id, taskB.id, taskC.id],
+      savedOrderedTaskIds: savedOrder,
+      excludeNotRequired: true,
+    }).finalOrder
+
+    expect(deterministicOrder).toEqual([taskB.id, taskA.id])
+  })
+
+  it('NOT_REQUIRED customization persists state while task row remains stored', async () => {
+    const actors = await createTenantActorsFixture()
+    const eco = await testPrisma.eCO.create({
+      data: { title: 'Hide Task ECO', tenantId: actors.tenantId },
+    })
+    const task = await createTaskFixture({
+      tenantId: actors.tenantId,
+      ecoId: eco.id,
+      ownerRoleId: actors.ownerRoleId,
+      name: 'Hide me',
+      state: 'NOT_STARTED',
+      approvalPolicy: 'NONE',
+    })
+
+    const patchResult = await patchTask(
+      {
+        tenantId: actors.tenantId,
+        actorId: actors.ownerActorId,
+        state: 'NOT_REQUIRED',
+      },
+      task.id
+    )
+    expect(patchResult.status).toBe(200)
+    expect(patchResult.json.state).toBe('NOT_REQUIRED')
+
+    const persisted = await testPrisma.task.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { id: true, state: true },
+    })
+    expect(persisted.id).toBe(task.id)
+    expect(persisted.state).toBe('NOT_REQUIRED')
   })
 })
