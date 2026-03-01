@@ -653,6 +653,14 @@ export function WorkflowCommandCenter({
     )
   }
 
+  function enterCustomizeMode() {
+    setCustomOrderTaskIds(listOrderTaskIds)
+    setCustomizationDirty(false)
+    setCustomizationSaved(false)
+    setCustomizeMode(true)
+    setShowCustomizeBanner(false)
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 px-6 py-6 text-slate-900">
       <div className="mx-auto max-w-7xl space-y-4">
@@ -663,6 +671,15 @@ export function WorkflowCommandCenter({
               <p className="text-xs text-slate-700">ECO: {selectedEcoTitle}</p>
             </div>
             <div className="flex items-center gap-2">
+              {!customizeMode ? (
+                <button
+                  type="button"
+                  onClick={enterCustomizeMode}
+                  className="rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800"
+                >
+                  Customize
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setDebugMode(!debugMode)}
@@ -808,13 +825,7 @@ export function WorkflowCommandCenter({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setCustomOrderTaskIds(listOrderTaskIds)
-                    setCustomizationDirty(false)
-                    setCustomizationSaved(false)
-                    setCustomizeMode(true)
-                    setShowCustomizeBanner(false)
-                  }}
+                  onClick={enterCustomizeMode}
                   className="rounded bg-blue-600 px-2 py-1 font-semibold text-white"
                 >
                   Customize
