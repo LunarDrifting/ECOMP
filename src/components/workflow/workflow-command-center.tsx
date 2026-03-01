@@ -76,7 +76,7 @@ export function WorkflowCommandCenter({
   initialEcoId = '',
   initialActorId = '',
 }: WorkflowCommandCenterProps) {
-  const { debugMode, setDebugMode } = useDebugMode()
+  const { debugMode, setDebugMode, hydrated } = useDebugMode()
   const [tenantId, setTenantId] = useState(initialTenantId)
   const [ecoId, setEcoId] = useState(initialEcoId)
   const [actorId, setActorId] = useState(initialActorId)
@@ -242,6 +242,7 @@ export function WorkflowCommandCenter({
       activationConstraint: { distance: 4 },
     })
   )
+  const isDebugEnabled = hydrated && debugMode
 
   async function refreshData(options?: {
     animateDiff?: boolean
@@ -667,12 +668,14 @@ export function WorkflowCommandCenter({
                 onClick={() => setDebugMode(!debugMode)}
                 className={[
                   'rounded-md border px-3 py-2 text-xs font-semibold',
-                  debugMode
+                  !hydrated
+                    ? 'border-zinc-300 bg-zinc-100 text-slate-700'
+                    : isDebugEnabled
                     ? 'border-zinc-900 bg-zinc-900 text-white'
                     : 'border-zinc-300 bg-white text-slate-700',
                 ].join(' ')}
               >
-                Debug {debugMode ? 'ON' : 'OFF'}
+                {!hydrated ? 'Debug' : `Debug ${isDebugEnabled ? 'ON' : 'OFF'}`}
               </button>
               <button
                 type="button"
@@ -690,10 +693,10 @@ export function WorkflowCommandCenter({
           <div
             className={[
               'mb-4 grid grid-cols-1 gap-2',
-              debugMode ? 'md:grid-cols-3' : 'md:grid-cols-2',
+              isDebugEnabled ? 'md:grid-cols-3' : 'md:grid-cols-2',
             ].join(' ')}
           >
-            {debugMode ? (
+            {isDebugEnabled ? (
               <input
                 value={tenantId}
                 onChange={(event) => setTenantId(event.target.value)}
@@ -701,8 +704,8 @@ export function WorkflowCommandCenter({
                 className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
               />
             ) : null}
-            <div className={debugMode ? 'grid grid-cols-[minmax(0,1fr)_auto] gap-2' : ''}>
-              {debugMode ? (
+            <div className={isDebugEnabled ? 'grid grid-cols-[minmax(0,1fr)_auto] gap-2' : ''}>
+              {isDebugEnabled ? (
                 <input
                   value={ecoId}
                   onChange={(event) => setEcoId(event.target.value)}
