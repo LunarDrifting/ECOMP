@@ -33,16 +33,16 @@ export function TaskRow({
         className="min-w-0 text-left"
         title="Open details"
       >
-        <div className="truncate text-sm font-semibold text-zinc-900">{task.name ?? task.id}</div>
-        <div className="truncate text-xs text-zinc-500">{task.id}</div>
+        <div className="truncate text-sm font-semibold text-slate-900">{task.name ?? task.id}</div>
+        <div className="truncate text-xs text-slate-700">{task.id}</div>
       </button>
 
       <StateBadge state={task.state} />
 
-      <div className="text-xs text-zinc-600">↑ {task.upstreamTaskIds.length}</div>
-      <div className="text-xs text-zinc-600">↓ {task.downstreamTaskIds.length}</div>
+      <div className="text-xs text-slate-700">↑ {task.upstreamTaskIds.length}</div>
+      <div className="text-xs text-slate-700">↓ {task.downstreamTaskIds.length}</div>
       <div
-        className="text-xs text-zinc-600"
+        className="text-xs text-slate-700"
         title={
           task.blockingTaskIds.length > 0
             ? `blocked by ${task.blockingTaskIds.length} tasks`
@@ -67,7 +67,7 @@ export function TaskRow({
         <button
           type="button"
           onClick={onComplete}
-          disabled={!task.canComplete || completing}
+          disabled={task.canComplete !== true || completing}
           className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {completing ? 'Completing…' : 'Complete'}

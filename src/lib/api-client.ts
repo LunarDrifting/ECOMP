@@ -53,6 +53,11 @@ export type AuditTimelineResponse = {
   }>
 }
 
+export type TenantUserOption = {
+  id: string
+  email: string
+}
+
 type CompleteTaskResponse = {
   taskMarkedDone: boolean
   tasksUnblocked: number
@@ -115,6 +120,10 @@ export async function fetchAuditTimeline(args: {
   return requestJson<AuditTimelineResponse>(
     `/api/ecos/${args.ecoId}/audit?${query.toString()}`
   )
+}
+
+export async function fetchTenantUsers(tenantId: string) {
+  return requestJson<TenantUserOption[]>(`/api/tenants/${tenantId}/users`)
 }
 
 export async function completeTask(args: {

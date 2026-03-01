@@ -5,7 +5,9 @@ import {
   completeTask,
   fetchAuditTimeline,
   fetchProjection,
+  fetchTenantUsers,
   type AuditTimelineResponse,
+  type TenantUserOption,
   type WorkflowProjectionResponse,
 } from '@/lib/api-client'
 import { CountBadge } from '@/components/workflow/count-badge'
@@ -35,6 +37,7 @@ export function WorkflowCommandCenter({
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
   const [message, setMessage] = useState<string>('')
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list')
+  const [tenantUsers, setTenantUsers] = useState<TenantUserOption[]>([])
   const [newlyReadyTaskIds, setNewlyReadyTaskIds] = useState<string[]>([])
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([])
   const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -66,17 +69,19 @@ export function WorkflowCommandCenter({
   async function refreshData(options?: {
     animateDiff?: boolean
     previousProjection?: WorkflowProjectionResponse | null
+    actorIdOverride?: string
   }) {
     if (!tenantId || !ecoId) {
       setMessage('tenantId and ecoId are required')
       return
     }
 
+    const effectiveActorId = options?.actorIdOverride ?? actorId
     setLoading(true)
     setMessage('')
     try {
       const [projectionResult, auditResult] = await Promise.all([
-        fetchProjection({ tenantId, ecoId, actorId }),
+        fetchProjection({ tenantId, ecoId, actorId: effectiveActorId }),
         fetchAuditTimeline({ tenantId, ecoId }),
       ])
 
@@ -128,6 +133,47 @@ export function WorkflowCommandCenter({
     }
   }
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTenantUsers() {
+      if (!tenantId) {
+        setTenantUsers([])
+        return
+      }
+
+      const result = await fetchTenantUsers(tenantId)
+      if (cancelled) {
+        return
+      }
+
+      if (!result.ok) {
+        setTenantUsers([])
+        setMessage(`Tenant users load failed (${result.status}): ${result.error}`)
+        return
+      }
+
+      setTenantUsers(result.data)
+
+      const hasSelectedActor = result.data.some((user) => user.id === actorId)
+      const nextActorId = hasSelectedActor ? actorId : (result.data[0]?.id ?? '')
+
+      if (nextActorId !== actorId) {
+        setActorId(nextActorId)
+      }
+
+      if (ecoId && nextActorId) {
+        void refreshData({ actorIdOverride: nextActorId })
+      }
+    }
+
+    void loadTenantUsers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, ecoId, actorId])
+
   async function handleComplete(taskId: string) {
     if (!tenantId || !actorId) {
       setMessage('tenantId and actorId are required to complete tasks')
@@ -155,13 +201,13 @@ export function WorkflowCommandCenter({
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 px-6 py-6">
+    <div className="min-h-screen bg-zinc-50 px-6 py-6 text-slate-900">
       <div className="mx-auto max-w-7xl space-y-4">
         <header className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-zinc-900">Workflow Command Center</h1>
-              <p className="text-xs text-zinc-500">ECO: {projection?.ecoId || ecoId || '—'}</p>
+              <p className="text-xs text-slate-700">ECO: {projection?.ecoId || ecoId || '—'}</p>
             </div>
             <button
               type="button"
@@ -180,21 +226,31 @@ export function WorkflowCommandCenter({
               value={tenantId}
               onChange={(event) => setTenantId(event.target.value)}
               placeholder="tenantId"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
             />
             <input
               value={ecoId}
               onChange={(event) => setEcoId(event.target.value)}
               placeholder="ecoId"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
             />
             <select
               value={actorId}
-              onChange={(event) => setActorId(event.target.value)}
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+              onChange={(event) => {
+                const nextActorId = event.target.value
+                setActorId(nextActorId)
+                if (tenantId && ecoId) {
+                  void refreshData({ actorIdOverride: nextActorId })
+                }
+              }}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-slate-900"
             >
-              <option value="">actorId (required for actions)</option>
-              <option value={actorId || ''}>{actorId || 'Use current actorId'}</option>
+              <option value="">Select actor...</option>
+              {tenantUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.email} ({user.id.slice(0, 8)})
+                </option>
+              ))}
             </select>
           </div>
 
@@ -233,7 +289,7 @@ export function WorkflowCommandCenter({
                 'px-3 py-1.5 font-semibold',
                 viewMode === 'list'
                   ? 'bg-zinc-900 text-white'
-                  : 'bg-white text-zinc-700',
+                  : 'bg-white text-slate-700',
               ].join(' ')}
             >
               List View
@@ -245,7 +301,7 @@ export function WorkflowCommandCenter({
                 'px-3 py-1.5 font-semibold',
                 viewMode === 'graph'
                   ? 'bg-zinc-900 text-white'
-                  : 'bg-white text-zinc-700',
+                  : 'bg-white text-slate-700',
               ].join(' ')}
             >
               Graph View
@@ -253,7 +309,7 @@ export function WorkflowCommandCenter({
           </div>
 
           {message ? (
-            <p className="mt-3 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-700">{message}</p>
+            <p className="mt-3 rounded bg-zinc-100 px-2 py-1 text-xs text-slate-700">{message}</p>
           ) : null}
         </header>
 
@@ -286,7 +342,7 @@ export function WorkflowCommandCenter({
               />
             ) : null}
             {tasksInOrder.length === 0 ? (
-              <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500">
+              <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-slate-700">
                 Load projection to view tasks.
               </div>
             ) : null}
